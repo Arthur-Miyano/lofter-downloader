@@ -44,20 +44,22 @@ class Spider(ABC):
     async def _get_client(self) -> httpx.AsyncClient:
         """获取或创建异步 HTTP 客户端（含 Cookie 支持）。"""
         if self._client is None:
-            headers: dict[str, str] = {"User-Agent": self.USER_AGENT}
+            headers: dict[str, str] = {
+                "User-Agent": self.USER_AGENT,
+                "Referer": "https://www.lofter.com/",
+            }
             if settings.cookie:
+                logger.debug(
+                    "Using cookie (%d chars): %s...",
+                    len(settings.cookie),
+                    settings.cookie[:80],
+                )
                 headers["Cookie"] = settings.cookie
             self._client = httpx.AsyncClient(
                 timeout=settings.request_timeout,
                 headers=headers,
             )
         return self._client
-
-    LOGIN_PAGE_MARKERS = [
-        "/front/login",
-        "LOFTER - 让兴趣，更有趣",
-        "lofter-root-container",
-    ]
 
     async def fetch(self, url: str) -> str:
         """发送 GET 请求，带重试、限速和登录检测。
@@ -90,9 +92,8 @@ class Spider(ABC):
                     )
                     resp = await client.get(url, follow_redirects=True)
                     resp.raise_for_status()
-                    text = resp.text
-                    self._check_login_page(text)
-                    return text
+                    self._check_login_page(resp, url)
+                    return resp.text
 
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
@@ -109,19 +110,25 @@ class Spider(ABC):
         ) from last_exc
 
     @staticmethod
-    def _check_login_page(html: str) -> None:
-        """检测页面是否为 LOFTER 登录页面。
+    def _check_login_page(resp: httpx.Response, url: str) -> None:
+        """检测是否被重定向到 LOFTER 登录页面。
+
+        通过检查响应 URL 判断，避免误判 SPA 页面。
 
         Raises
         ------
         LoginRequiredError
-            检测到登录页特征时抛出
+            检测到被重定向到登录页时抛出
         """
-        for marker in Spider.LOGIN_PAGE_MARKERS:
-            if marker in html[:2000]:
-                raise LoginRequiredError(
-                    "LOFTER 需要登录才能访问，请先导入 Cookie"
-                )
+        final_url = str(resp.url)
+        if "/front/login" in final_url:
+            logger.warning(
+                "Request to %s was redirected to login page. Cookie may be invalid.",
+                url,
+            )
+            raise LoginRequiredError(
+                "LOFTER 需要登录才能访问，请先导入有效的 Cookie"
+            )
 
     @staticmethod
     def parse_html(html: str) -> BeautifulSoup:
