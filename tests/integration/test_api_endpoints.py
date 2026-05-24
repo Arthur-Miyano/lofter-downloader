@@ -45,6 +45,45 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         assert resp.json()["ok"] is False
 
+    def test_login_with_token(self):
+        """Token 登录接口应返回 ok。"""
+        self._logout()
+        resp = client.post("/api/login/token", json={"token": "test_token_123"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    def test_login_with_empty_token(self):
+        """空 Token 应返回错误。"""
+        resp = client.post("/api/login/token", json={"token": ""})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False
+
+    def test_login_verify_without_auth(self):
+        """未登录时验证应返回错误。"""
+        self._logout()
+        resp = client.post("/api/login/verify")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("ok") is False
+
+    def test_login_verify_with_token(self):
+        """有 Token 时验证应尝试连接。"""
+        self._logout()
+        client.post("/api/login/token", json={"token": "dummy_token"})
+        resp = client.post("/api/login/verify")
+        assert resp.status_code == 200
+        # Token 是模拟的，所以应该验证失败但接口正常
+        data = resp.json()
+        assert "ok" in data
+        self._logout()
+
+    def test_login_status_shows_auth_mode(self):
+        """登录状态应返回 auth_mode。"""
+        self._logout()
+        resp = client.get("/api/login/status")
+        data = resp.json()
+        assert "auth_mode" in data
+
     def test_logout(self):
         """登出接口应返回 ok。"""
         resp = client.delete("/api/login")

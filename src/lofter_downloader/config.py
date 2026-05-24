@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # 登录 Cookie（敏感信息，不提交到版本控制）
     cookie: str = ""
 
+    # 手机端 API 认证 Token（lofter-phone-login-auth）
+    lofter_phone_login_auth: str = ""
+
     # 数据库路径
     db_path: Path = Path.home() / ".lofter_downloader" / "data.db"
 

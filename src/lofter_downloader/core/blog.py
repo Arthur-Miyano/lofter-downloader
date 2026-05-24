@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from lofter_downloader.core.api import LofterAPI
 from lofter_downloader.core.post import Post, PostDownloader
 from lofter_downloader.core.resolver import UserResolver
 from lofter_downloader.core.spider import Spider
@@ -14,6 +15,7 @@ class BlogDownloader(Spider):
     """作者全部文章下载器。
 
     根据用户数字 ID 解析博客域名，遍历全部分页下载所有文章。
+    优先使用 DWR API 获取文章列表，失败时降级到 HTML 翻页解析。
     """
 
     def __init__(self) -> None:
@@ -51,17 +53,46 @@ class BlogDownloader(Spider):
         return posts
 
     async def _collect_all_post_links(self, domain: str) -> list[str]:
-        """收集博客中所有文章的链接。"""
-        all_links: list[str] = []
-        page = 1
+        """收集博客中所有文章的链接。
 
+        优先使用 DWR API，失败时降级到 HTML 翻页。
+        """
+        # 策略1: DWR API
+        api = LofterAPI()
+        try:
+            all_links: list[str] = []
+            offset = 0
+            while True:
+                posts_data = await api.blog_posts(domain, offset)
+                if not posts_data:
+                    break
+                for p in posts_data:
+                    post_id = p.get("postId", "")
+                    if post_id:
+                        link = f"https://{domain}.lofter.com/post/{post_id}"
+                        if link not in all_links:
+                            all_links.append(link)
+                offset += 20
+            if all_links:
+                logger.info(
+                    "Fetched %d post links via DWR API for %s",
+                    len(all_links),
+                    domain,
+                )
+                return all_links
+        except Exception as exc:
+            logger.debug("DWR API failed for %s, falling back to HTML: %s", domain, exc)
+
+        # 策略2: HTML 翻页（降级）
+        logger.info("Falling back to HTML page parsing for %s", domain)
+        all_links = []
+        page = 1
         while True:
             links = await self._get_post_links_from_page(domain, page)
             if not links:
                 break
             all_links.extend(links)
             page += 1
-
         return all_links
 
     async def _get_post_links_from_page(self, domain: str, page: int) -> list[str]:

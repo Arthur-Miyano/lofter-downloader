@@ -31,6 +31,7 @@ class AuthManager:
 
     SALT = b"lofter_downloader_salt"
     SESSION_FILE = "session.enc"
+    TOKEN_FILE = "token.enc"
 
     def __init__(self, key_file: Path | None = None) -> None:
         key_dir = key_file or settings.db_path.parent
@@ -107,3 +108,39 @@ class AuthManager:
     def has_session(self) -> bool:
         """检查是否有保存的登录会话。"""
         return self._session_path.exists()
+
+    # --- Token 管理 ---
+
+    def save_token(self, token: str) -> None:
+        """加密保存 Token 到本地文件。"""
+        cipher = self._get_cipher()
+        encrypted = cipher.encrypt(token.encode("utf-8"))
+        token_path = self._key_path.parent / self.TOKEN_FILE
+        token_path.write_bytes(encrypted)
+        logger.info("Token saved securely to: %s", token_path)
+
+    def load_token(self) -> str | None:
+        """从本地文件加载并解密 Token。"""
+        token_path = self._key_path.parent / self.TOKEN_FILE
+        if not token_path.exists():
+            return None
+        try:
+            cipher = self._get_cipher()
+            encrypted = token_path.read_bytes()
+            token = cipher.decrypt(encrypted).decode("utf-8")
+            logger.debug("Token loaded from: %s", token_path)
+            return token
+        except Exception:
+            logger.warning("Failed to decrypt saved token")
+            return None
+
+    def clear_token(self) -> None:
+        """清除保存的 Token。"""
+        token_path = self._key_path.parent / self.TOKEN_FILE
+        if token_path.exists():
+            token_path.unlink()
+            logger.info("Token cleared")
+
+    def has_token(self) -> bool:
+        """检查是否有保存的 Token。"""
+        return (self._key_path.parent / self.TOKEN_FILE).exists()

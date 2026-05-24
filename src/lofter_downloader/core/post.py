@@ -13,6 +13,7 @@ from typing import Any
 
 from markdownify import markdownify as md
 
+from lofter_downloader.core.api import LofterAPI
 from lofter_downloader.core.spider import Spider
 from lofter_downloader.utils.exceptions import ParseError
 from lofter_downloader.utils.logger import setup_logger
@@ -62,10 +63,13 @@ class PostDownloader(Spider):
     2. 降级为 HTML 页面解析
     """
 
-    API_POST_DETAIL = "https://www.lofter.com/next/api/post/detail"
-
     async def run(self, url: str) -> Post:  # type: ignore[override]
         """下载并解析单篇文章。
+
+        策略：
+        1. LofterAPI.post_detail() — JSON API（首选）
+        2. HTML 页面嵌入式 JSON 提取
+        3. 传统 HTML 选择器解析（降级）
 
         Parameters
         ----------
@@ -84,22 +88,22 @@ class PostDownloader(Spider):
         """
         logger.info("Downloading post: %s", url)
 
-        # 优先尝试 API 接口
+        # 策略1: JSON API
         post = await self._try_api(url)
         if post is not None:
             return post
 
-        # 降级到 HTML 页面解析
+        # 策略2: HTML 页面解析
         logger.info("Falling back to HTML parsing for: %s", url)
         html = await self.fetch(url)
         soup = self.parse_html(html)
 
-        # 尝试从嵌入式 JSON 中提取
+        # 策略2a: 嵌入式 JSON
         post = self._try_embedded_json(html, url)
         if post is not None:
             return post
 
-        # 最后尝试传统 HTML 选择器
+        # 策略2b: 传统 HTML 选择器
         title = self._extract_title(soup, url)
         author = self._extract_author(soup)
         publish_date = self._extract_date(soup)
@@ -118,19 +122,20 @@ class PostDownloader(Spider):
         return post
 
     async def _try_api(self, url: str) -> Post | None:
-        """尝试通过 LOFTER API 获取文章数据。"""
+        """通过 api.lofter.com JSON API 获取文章数据。"""
         post_id = self._extract_post_id(url)
-        if not post_id:
+        blog_domain = self._extract_blog_domain(url)
+        if not post_id or not blog_domain:
             return None
-
-        api_url = f"{self.API_POST_DETAIL}?postId={post_id}"
         try:
-            logger.debug("Trying API: %s", api_url)
-            html = await self.fetch(api_url)
-            # API 也返回 HTML 壳，提取其中嵌入的 JSON
-            return self._try_embedded_json(html, url)
+            logger.debug("Trying API post_detail: %s blog=%s", post_id, blog_domain)
+            api = LofterAPI()
+            data = await api.post_detail(blog_domain, post_id)
+            if data and data.get("postTitle"):
+                return self._parse_api_response(data, url)
+            return None
         except Exception as exc:
-            logger.debug("API request failed: %s", exc)
+            logger.debug("API post_detail failed: %s", exc)
             return None
 
     @staticmethod
@@ -138,6 +143,30 @@ class PostDownloader(Spider):
         """从文章 URL 中提取 postId。"""
         match = re.search(r"/post/([^/?]+)", url)
         return match.group(1) if match else None
+
+    @staticmethod
+    def _extract_blog_domain(url: str) -> str | None:
+        """从文章 URL 中提取博客域名前缀。"""
+        match = re.search(r"https?://([^.]+)\.lofter\.com", url)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _parse_api_response(data: dict[str, Any], url: str) -> Post:
+        """将 API JSON 响应解析为 Post 对象。"""
+        title = data.get("postTitle", "")
+        content = data.get("postContent", "")
+        author = data.get("blogName", "")
+        date = data.get("postTime", "")
+        images = data.get("imgUrls", [])
+        return Post(
+            url=url,
+            title=title,
+            author=author,
+            publish_date=str(date),
+            content_html=content,
+            content_markdown=md(content, heading_style="ATX"),
+            image_urls=images,
+        )
 
     def _try_embedded_json(self, html: str, url: str) -> Post | None:
         """尝试从页面中提取嵌入式 JSON 数据。"""

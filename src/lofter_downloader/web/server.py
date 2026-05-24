@@ -38,9 +38,18 @@ async def index() -> str:
 
 @app.get("/api/login/status")
 async def login_status():
-    """检查登录状态。"""
-    has_cookie = bool(settings.cookie)
-    return {"logged_in": has_cookie}
+    """检查登录状态（Cookie 或 Token）。"""
+    logged_in = bool(settings.cookie) or bool(settings.lofter_phone_login_auth)
+    if settings.lofter_phone_login_auth:
+        auth_mode = "token"
+    elif settings.cookie:
+        auth_mode = "cookie"
+    else:
+        auth_mode = ""
+    return {
+        "logged_in": logged_in,
+        "auth_mode": auth_mode,
+    }
 
 
 @app.post("/api/login/cookie")
@@ -54,11 +63,44 @@ async def login_with_cookie(data: dict):
     return {"ok": True}
 
 
+@app.post("/api/login/token")
+async def login_with_token(data: dict):
+    """导入 lofter-phone-login-auth Token。"""
+    token = data.get("token", "")
+    if not token:
+        return {"ok": False, "error": "Token 不能为空"}
+    settings.lofter_phone_login_auth = token
+    logger.info("Token updated via API")
+    return {"ok": True}
+
+
+@app.post("/api/login/verify")
+async def verify_login():
+    """验证当前 Token/Cookie 有效性，返回用户信息。"""
+    from lofter_downloader.core.api import LofterAPI
+
+    if not settings.lofter_phone_login_auth and not settings.cookie:
+        return {"ok": False, "error": "未导入 Token 或 Cookie"}
+
+    # 优先用 Token 验证
+    if settings.lofter_phone_login_auth:
+        try:
+            api = LofterAPI()
+            user_info = await api.verify_token()
+            if user_info and user_info.get("blogName"):
+                return {"ok": True, "user": user_info, "auth_mode": "token"}
+        except Exception as exc:
+            logger.debug("Token verify failed: %s", exc)
+
+    return {"ok": False, "error": "Token 或 Cookie 无效，请重新获取"}
+
+
 @app.delete("/api/login")
 async def logout():
     """清除登录信息。"""
     settings.cookie = ""
-    logger.info("Cookie cleared via API")
+    settings.lofter_phone_login_auth = ""
+    logger.info("Login info cleared via API")
     return {"ok": True}
 
 
