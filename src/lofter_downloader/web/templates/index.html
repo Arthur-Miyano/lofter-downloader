@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOFTER 文章下载器</title>
+    <script src="https://cdn.tailwindcss.com">
+    </script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a'}
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .dark { background-color: #1a1a2e; color: #e0e0e0; }
+        .dark .bg-white { background-color: #16213e; }
+        .dark .text-gray-700 { color: #c0c0c0; }
+        .dark .text-gray-500 { color: #9ca3af; }
+        .dark .border-gray-200 { border-color: #2a2a4a; }
+        .dark .hover\:bg-gray-50:hover { background-color: #1a1a3e; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen" x-data="app()">
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <!-- 头部 -->
+        <header class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-primary-700">LOFTER 文章下载器</h1>
+                <p class="text-gray-500 mt-1">一键下载网易 LOFTER 文章，保存为 Markdown 格式</p>
+            </div>
+            <div class="flex items-center gap-4">
+                <button @click="toggleDark()" class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                    <span x-text="isDark ? '☀️' : '🌙'" class="text-xl"></span>
+                </button>
+            </div>
+        </header>
+
+        <!-- 快速下载：单篇文章 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📄 快速下载</h2>
+            <div class="flex gap-3">
+                <input type="url" x-model="singleUrl" placeholder="粘贴 LOFTER 文章链接..."
+                    class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
+                <button @click="downloadSingle()" :disabled="!singleUrl || loading"
+                    class="px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
+                    下载
+                </button>
+            </div>
+        </section>
+
+        <!-- 批量下载 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📋 批量下载</h2>
+            <div class="space-y-4">
+                <!-- 作者全部文章 -->
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700 w-24 shrink-0">作者数字 ID</span>
+                    <input type="number" x-model="userId" placeholder="输入作者数字 ID"
+                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
+                    <button @click="downloadBlog()" :disabled="!userId || loading"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
+                        下载全部
+                    </button>
+                </div>
+
+                <!-- 合集下载 -->
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700 w-24 shrink-0">合集链接</span>
+                    <input type="url" x-model="collectionUrl" placeholder="粘贴合集页面链接"
+                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
+                    <button @click="downloadCollection()" :disabled="!collectionUrl || loading"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
+                        下载合集
+                    </button>
+                </div>
+
+                <!-- 收藏下载 -->
+                <div class="flex items-center gap-3 pt-2 border-t border-gray-100">
+                    <span class="text-gray-700 w-24 shrink-0">收藏文章 🔒</span>
+                    <span x-text="loggedIn ? '✅ 已登录' : '❌ 未登录'" class="text-sm" :class="loggedIn ? 'text-green-600' : 'text-red-500'"></span>
+                    <button @click="showLoginModal = true" class="text-sm text-primary-600 hover:text-primary-800 underline">管理登录</button>
+                    <button @click="downloadFavorites()" :disabled="!loggedIn || loading"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium ml-auto">
+                        下载收藏
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 下载任务 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📊 下载任务</h2>
+            <div x-show="tasks.length === 0" class="text-gray-400 text-center py-8">
+                暂无下载任务
+            </div>
+            <div class="space-y-3">
+                <template x-for="task in tasks" :key="task.task_id">
+                    <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <div>
+                                <span class="font-medium text-gray-800" x-text="task.type === 'post' ? '单篇' : task.type === 'blog' ? '作者全部' : task.type === 'collection' ? '合集' : '收藏'"></span>
+                                <span class="text-sm text-gray-500 ml-2" x-text="task.message"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm px-2 py-0.5 rounded" :class="statusClass(task.status)" x-text="statusText(task.status)"></span>
+                                <button @click="cancelTask(task.task_id)" x-show="task.status === 'running'" class="text-red-500 hover:text-red-700 text-sm">取消</button>
+                            </div>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div class="bg-primary-600 h-2 rounded-full transition-all duration-500" :style="'width: ' + (task.progress * 100) + '%'"></div>
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1" x-text="Math.round(task.progress * 100) + '%'"></div>
+                    </div>
+                </template>
+            </div>
+        </section>
+
+        <!-- 已完成 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📁 已完成</h2>
+            <div x-show="completedTasks.length === 0" class="text-gray-400 text-center py-8">
+                暂无已完成任务
+            </div>
+            <div class="space-y-2">
+                <template x-for="task in completedTasks" :key="task.task_id">
+                    <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+                        <div>
+                            <span class="text-sm font-medium text-gray-700" x-text="task.type === 'post' ? '单篇' : task.type === 'blog' ? '作者全部' : task.type === 'collection' ? '合集' : '收藏'"></span>
+                            <span class="text-sm text-gray-500 ml-2" x-text="task.message"></span>
+                        </div>
+                        <span class="text-xs text-gray-400" x-text="formatTime(task.created_at)"></span>
+                    </div>
+                </template>
+            </div>
+        </section>
+
+        <!-- 登录弹窗 -->
+        <div x-show="showLoginModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showLoginModal = false">
+            <div class="bg-white rounded-xl shadow-2xl p-6 w-96 max-w-full">
+                <h3 class="text-lg font-semibold mb-4">🔑 登录管理</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">导入 Cookie</label>
+                        <p class="text-xs text-gray-500 mb-2">浏览器登录 LOFTER 后，从开发者工具复制 Cookie 字符串</p>
+                        <textarea x-model="cookieInput" rows="3" placeholder="粘贴 Cookie..."
+                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 outline-none transition"></textarea>
+                    </div>
+                    <div class="flex gap-3">
+                        <button @click="submitCookie()" :disabled="!cookieInput"
+                            class="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 font-medium">
+                            导入
+                        </button>
+                        <button @click="clearLogin()" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium">
+                            清除
+                        </button>
+                    </div>
+                    <div x-show="loginMessage" class="text-sm" :class="loginMessage.includes('成功') ? 'text-green-600' : 'text-red-500'" x-text="loginMessage"></div>
+                </div>
+                <button @click="showLoginModal = false" class="mt-4 text-sm text-gray-500 hover:text-gray-700">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer>
+    </script>
+    <script>
+        function app() {
+            return {
+                // 状态
+                singleUrl: '',
+                userId: '',
+                collectionUrl: '',
+                cookieInput: '',
+                showLoginModal: false,
+                loginMessage: '',
+                loggedIn: false,
+                loading: false,
+                tasks: [],
+                isDark: false,
+
+                // 计算属性
+                get completedTasks() {
+                    return this.tasks.filter(t => t.status === 'completed' || t.status === 'failed' || t.status ===
+                        'canceled');
+                },
+
+                // 初始化
+                init() {
+                    this.checkLogin();
+                    this.loadTasks();
+                    // 定期轮询任务状态
+                    setInterval(() => this.loadTasks(), 2000);
+                    // 检查暗黑模式偏好
+                    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                        this.isDark = true;
+                        document.documentElement.classList.add('dark');
+                    }
+                },
+
+                toggleDark() {
+                    this.isDark = !this.isDark;
+                    document.documentElement.classList.toggle('dark');
+                },
+
+                // 登录检查
+                async checkLogin() {
+                    try {
+                        const resp = await fetch('/api/login/status');
+                        const data = await resp.json();
+                        this.loggedIn = data.logged_in;
+                    } catch (e) {
+                        console.error('检查登录失败', e);
+                    }
+                },
+
+                // 提交 Cookie
+                async submitCookie() {
+                    try {
+                        const resp = await fetch('/api/login/cookie', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ cookie: this.cookieInput })
+                        });
+                        const data = await resp.json();
+                        if (data.ok) {
+                            this.loginMessage = '✅ Cookie 导入成功';
+                            this.loggedIn = true;
+                            this.cookieInput = '';
+                            setTimeout(() => { this.showLoginModal = false; this.loginMessage = ''; }, 1500);
+                        } else {
+                            this.loginMessage = '❌ 导入失败: ' + (data.error || '未知错误');
+                        }
+                    } catch (e) {
+                        this.loginMessage = '❌ 网络错误';
+                    }
+                },
+
+                // 清除登录
+                async clearLogin() {
+                    await fetch('/api/login', { method: 'DELETE' });
+                    this.loggedIn = false;
+                    this.loginMessage = '✅ 已清除登录信息';
+                    setTimeout(() => { this.showLoginModal = false; this.loginMessage = ''; }, 1500);
+                },
+
+                // 加载任务列表
+                async loadTasks() {
+                    try {
+                        const resp = await fetch('/api/tasks');
+                        this.tasks = await resp.json();
+                    } catch (e) {
+                        console.error('加载任务失败', e);
+                    }
+                },
+
+                // 下载单篇
+                async downloadSingle() {
+                    if (!this.singleUrl) return;
+                    this.loading = true;
+                    try {
+                        const resp = await fetch('/api/download/post', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: this.singleUrl })
+                        });
+                        const data = await resp.json();
+                        if (data.task_id) {
+                            this.singleUrl = '';
+                            this.loadTasks();
+                        }
+                    } catch (e) {
+                        alert('下载失败');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                // 下载博客全部
+                async downloadBlog() {
+                    if (!this.userId) return;
+                    this.loading = true;
+                    try {
+                        const resp = await fetch('/api/download/blog', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_id: parseInt(this.userId) })
+                        });
+                        const data = await resp.json();
+                        if (data.task_id) {
+                            this.loadTasks();
+                        }
+                    } catch (e) {
+                        alert('下载失败');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                // 下载合集
+                async downloadCollection() {
+                    if (!this.collectionUrl) return;
+                    this.loading = true;
+                    try {
+                        const resp = await fetch('/api/download/collection', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: this.collectionUrl })
+                        });
+                        const data = await resp.json();
+                        if (data.task_id) {
+                            this.collectionUrl = '';
+                            this.loadTasks();
+                        }
+                    } catch (e) {
+                        alert('下载失败');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                // 下载收藏
+                async downloadFavorites() {
+                    if (!this.loggedIn) return;
+                    this.loading = true;
+                    try {
+                        const resp = await fetch('/api/download/favorites', { method: 'POST' });
+                        const data = await resp.json();
+                        if (data.task_id) {
+                            this.loadTasks();
+                        } else {
+                            alert(data.error || '下载失败');
+                        }
+                    } catch (e) {
+                        alert('下载失败');
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                // 取消任务
+                async cancelTask(taskId) {
+                    await fetch(`/api/tasks/${taskId}/cancel`, { method: 'POST' });
+                    this.loadTasks();
+                },
+
+                // 状态显示
+                statusClass(status) {
+                    const map = {
+                        'pending': 'bg-gray-100 text-gray-600',
+                        'running': 'bg-blue-100 text-blue-700',
+                        'completed': 'bg-green-100 text-green-700',
+                        'failed': 'bg-red-100 text-red-700',
+                        'canceled': 'bg-yellow-100 text-yellow-700'
+                    };
+                    return map[status] || 'bg-gray-100 text-gray-600';
+                },
+
+                statusText(status) {
+                    const map = {
+                        'pending': '等待中',
+                        'running': '下载中',
+                        'completed': '已完成',
+                        'failed': '失败',
+                        'canceled': '已取消'
+                    };
+                    return map[status] || status;
+                },
+
+                formatTime(iso) {
+                    if (!iso) return '';
+                    const d = new Date(iso);
+                    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit',
+                    minute: '2-digit' });
+                }
+            }
+        }
+    </script>
+</body>
+</html>

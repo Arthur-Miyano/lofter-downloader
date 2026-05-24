@@ -1,0 +1,63 @@
+site_name: LOFTER 下载器
+site_description: 网易 LOFTER 文章下载器——一键下载文章保存为 Markdown
+site_author: developer
+repo_url: https://github.com/user/lofter-downloader
+repo_name: lofter-downloader
+
+theme:
+  name: material
+  language: zh
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: 切换暗黑模式
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: 切换亮色模式
+  features:
+    - navigation.tabs
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            show_category_heading: true
+
+nav:
+  - 首页: index.md
+  - 快速开始: quickstart.md
+  - 登录说明: login.md
+  - API 文档:
+      - 爬虫核心: api/core.md
+      - 存储模块: api/storage.md
+      - Web 服务: api/web.md
+  - 开发者指南: developer.md
+  - 架构设计: architecture.md
+  - 变更日志: changelog.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.emoji
+  - toc:
+      permalink: true
