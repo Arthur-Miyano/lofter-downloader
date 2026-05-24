@@ -222,6 +222,7 @@ class LofterAPI:
         """验证当前 Token 有效性，返回用户基本信息。
 
         通过请求收藏列表接口判断 Token 是否有效。
+        LOFTER API 在未认证或 Token 无效时返回特定错误格式。
         """
         try:
             result = await self._post(
@@ -233,14 +234,32 @@ class LofterAPI:
                     "returnData": "1",
                 },
             )
-            # 成功返回包含用户信息的响应
-            if result.get("result") == "success":
-                blog_name = result.get("blogName", "") or result.get("userName", "")
-                return {
-                    "blogName": blog_name,
-                    "userId": result.get("userId", ""),
-                    "avatar": result.get("avatar", ""),
-                }
+            # 成功响应：result == "success" 且有数据
+            if result.get("result") in ("success", True, "ok"):
+                blog_name = (
+                    result.get("blogName", "")
+                    or result.get("userName", "")
+                    or result.get("user", {}).get("blogName", "")
+                )
+                if blog_name:
+                    return {
+                        "blogName": blog_name,
+                        "userId": result.get("userId", "")
+                        or result.get("user", {}).get("userId", ""),
+                        "avatar": result.get("avatar", "")
+                        or result.get("user", {}).get("avatar", ""),
+                    }
+            # 部分成功但有数据
+            data = result.get("data", [])
+            if data and isinstance(data, list) and len(data) > 0:
+                first = data[0]
+                blog_name = first.get("blogName", "")
+                if blog_name:
+                    return {
+                        "blogName": blog_name,
+                        "userId": first.get("userId", ""),
+                        "avatar": first.get("avatar", ""),
+                    }
             return None
         except Exception as exc:
             logger.debug("Token verification failed: %s", exc)

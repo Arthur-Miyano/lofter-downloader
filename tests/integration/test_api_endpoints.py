@@ -30,7 +30,8 @@ class TestAPIEndpoints:
         resp = client.get("/api/login/status")
         assert resp.status_code == 200
         data = resp.json()
-        assert "logged_in" in data
+        assert "has_token" in data
+        assert "has_cookie" in data
 
     def test_login_with_cookie(self):
         """Cookie 登录接口应返回 ok。"""
@@ -59,7 +60,7 @@ class TestAPIEndpoints:
         assert resp.json()["ok"] is False
 
     def test_login_verify_without_auth(self):
-        """未登录时验证应返回错误。"""
+        """未认证时验证应返回错误。"""
         self._logout()
         resp = client.post("/api/login/verify")
         assert resp.status_code == 200
@@ -72,7 +73,6 @@ class TestAPIEndpoints:
         client.post("/api/login/token", json={"token": "dummy_token"})
         resp = client.post("/api/login/verify")
         assert resp.status_code == 200
-        # Token 是模拟的，所以应该验证失败但接口正常
         data = resp.json()
         assert "ok" in data
         self._logout()
@@ -90,8 +90,8 @@ class TestAPIEndpoints:
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
 
-    def test_download_post_without_cookie(self):
-        """未登录时下载应返回错误。"""
+    def test_download_post_without_login(self):
+        """公开内容下载不需要登录。"""
         self._logout()
         resp = client.post(
             "/api/download/post",
@@ -99,11 +99,19 @@ class TestAPIEndpoints:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data.get("ok") is False
-        assert "Cookie" in data.get("error", "")
+        # 即使未登录也会创建任务（下载会失败但流程正常）
+        assert "task_id" in data
+
+    def test_download_blog_without_login(self):
+        """公开博客下载不需要登录。"""
+        self._logout()
+        resp = client.post("/api/download/blog", json={"user_id": 12345})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "task_id" in data
 
     def test_download_post_returns_task_id(self):
-        """登录后合法请求应返回 task_id。"""
+        """合法请求应返回 task_id。"""
         self._login()
         resp = client.post(
             "/api/download/post",
@@ -114,23 +122,14 @@ class TestAPIEndpoints:
         assert "task_id" in data
         self._logout()
 
-    def test_download_blog_without_cookie(self):
-        """未登录时下载作者全部文章应返回错误。"""
-        self._logout()
-        resp = client.post("/api/download/blog", json={"user_id": 12345})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data.get("ok") is False
-        assert "Cookie" in data.get("error", "")
-
-    def test_download_favorites_without_cookie(self):
-        """未登录时下载收藏应返回错误。"""
+    def test_download_favorites_without_auth(self):
+        """未认证时下载收藏应返回错误。"""
         self._logout()
         resp = client.post("/api/download/favorites", json={})
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("ok") is False
-        assert "Cookie" in data.get("error", "")
+        assert "Token" in data.get("error", "") or "Cookie" in data.get("error", "")
 
     def test_get_nonexistent_task_returns_error(self):
         """不存在的任务应返回错误。"""

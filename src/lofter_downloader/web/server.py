@@ -38,16 +38,18 @@ async def index() -> str:
 
 @app.get("/api/login/status")
 async def login_status():
-    """检查登录状态（Cookie 或 Token）。"""
-    logged_in = bool(settings.cookie) or bool(settings.lofter_phone_login_auth)
-    if settings.lofter_phone_login_auth:
+    """检查认证状态。"""
+    has_token = bool(settings.lofter_phone_login_auth)
+    has_cookie = bool(settings.cookie)
+    if has_token:
         auth_mode = "token"
-    elif settings.cookie:
+    elif has_cookie:
         auth_mode = "cookie"
     else:
         auth_mode = ""
     return {
-        "logged_in": logged_in,
+        "has_token": has_token,
+        "has_cookie": has_cookie,
         "auth_mode": auth_mode,
     }
 
@@ -79,20 +81,24 @@ async def verify_login():
     """验证当前 Token/Cookie 有效性，返回用户信息。"""
     from lofter_downloader.core.api import LofterAPI
 
-    if not settings.lofter_phone_login_auth and not settings.cookie:
-        return {"ok": False, "error": "未导入 Token 或 Cookie"}
-
-    # 优先用 Token 验证
     if settings.lofter_phone_login_auth:
         try:
             api = LofterAPI()
             user_info = await api.verify_token()
             if user_info and user_info.get("blogName"):
                 return {"ok": True, "user": user_info, "auth_mode": "token"}
+            return {"ok": False, "error": "Token 无效或已过期，请重新获取"}
         except Exception as exc:
             logger.debug("Token verify failed: %s", exc)
+            return {"ok": False, "error": f"Token 验证异常: {exc}"}
 
-    return {"ok": False, "error": "Token 或 Cookie 无效，请重新获取"}
+    if settings.cookie:
+        return {
+            "ok": False,
+            "error": "Cookie 无法直接验证，建议改用 lofter-phone-login-auth Token",
+        }
+
+    return {"ok": False, "error": "未导入任何认证信息"}
 
 
 @app.delete("/api/login")
@@ -104,19 +110,9 @@ async def logout():
     return {"ok": True}
 
 
-def _require_login() -> dict | None:
-    """检查是否已导入 Cookie，未登录时返回错误响应。"""
-    if not settings.cookie:
-        return {"ok": False, "error": "请先导入 Cookie 登录后才能使用下载功能"}
-    return None
-
-
 @app.post("/api/download/post")
 async def download_post(data: dict):
-    """下载单篇文章。"""
-    err = _require_login()
-    if err:
-        return err
+    """下载单篇文章（无需登录）。"""
     url = data.get("url", "")
     if not url:
         return {"ok": False, "error": "URL 不能为空"}
@@ -127,10 +123,7 @@ async def download_post(data: dict):
 
 @app.post("/api/download/blog")
 async def download_blog(data: dict):
-    """下载作者全部文章。"""
-    err = _require_login()
-    if err:
-        return err
+    """下载作者全部文章（无需登录）。"""
     user_id = data.get("user_id", 0)
     if not user_id:
         return {"ok": False, "error": "user_id 不能为空"}
@@ -141,10 +134,7 @@ async def download_blog(data: dict):
 
 @app.post("/api/download/collection")
 async def download_collection(data: dict):
-    """下载合集。"""
-    err = _require_login()
-    if err:
-        return err
+    """下载合集（无需登录）。"""
     url = data.get("url", "")
     if not url:
         return {"ok": False, "error": "URL 不能为空"}
@@ -155,10 +145,12 @@ async def download_collection(data: dict):
 
 @app.post("/api/download/favorites")
 async def download_favorites():
-    """下载收藏文章。"""
-    err = _require_login()
-    if err:
-        return err
+    """下载收藏文章（需要 Token 或 Cookie）。"""
+    if not settings.lofter_phone_login_auth and not settings.cookie:
+        return {
+            "ok": False,
+            "error": "收藏下载需要 lofter-phone-login-auth Token 或 Cookie",
+        }
     task_id = task_manager.create_task("favorites", {})
     asyncio.create_task(_run_download_favorites(task_id))
     return {"task_id": task_id}

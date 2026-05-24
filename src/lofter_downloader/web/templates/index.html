@@ -42,13 +42,12 @@
             </div>
         </header>
 
-        <!-- 登录提示 -->
-        <div x-show="!loggedIn"
-            class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-3">
-            <span class="text-amber-600 text-lg">⚠️</span>
+        <!-- 说明提示 -->
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <span class="text-blue-600 text-lg">ℹ️</span>
             <div>
-                <p class="text-amber-800 font-medium">LOFTER 当前要求登录后才能访问文章内容</p>
-                <p class="text-amber-600 text-sm mt-1">请先点击右上角 <button @click="showLoginModal = true" class="text-primary-600 underline">导入 Cookie</button> 登录后再使用下载功能</p>
+                <p class="text-blue-800 font-medium">公开内容无需登录，可直接下载</p>
+                <p class="text-blue-600 text-sm mt-1">只有 <strong>收藏下载</strong> 需要导入 <code class="bg-blue-100 px-1 rounded">lofter-phone-login-auth</code> Token</p>
             </div>
         </div>
 
@@ -58,12 +57,11 @@
             <div class="flex gap-3">
                 <input type="url" x-model="singleUrl" placeholder="粘贴 LOFTER 文章链接..."
                     class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                <button @click="downloadSingle()" :disabled="!singleUrl || !loggedIn || loading"
+                <button @click="downloadSingle()" :disabled="!singleUrl || loading"
                     class="px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
                     下载
                 </button>
             </div>
-            <p class="text-xs text-gray-400 mt-2">所有功能均需要 <button @click="showLoginModal = true" class="text-primary-600 underline">导入 Cookie</button> 登录后才能使用</p>
         </section>
 
         <!-- 批量下载 -->
@@ -75,7 +73,7 @@
                     <span class="text-gray-700 w-24 shrink-0">作者数字 ID</span>
                     <input type="number" x-model="userId" placeholder="输入作者数字 ID"
                         class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                    <button @click="downloadBlog()" :disabled="!userId || !loggedIn || loading"
+                    <button @click="downloadBlog()" :disabled="!userId || loading"
                         class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
                         下载全部
                     </button>
@@ -86,21 +84,21 @@
                     <span class="text-gray-700 w-24 shrink-0">合集链接</span>
                     <input type="url" x-model="collectionUrl" placeholder="粘贴合集页面链接"
                         class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                    <button @click="downloadCollection()" :disabled="!collectionUrl || !loggedIn || loading"
+                    <button @click="downloadCollection()" :disabled="!collectionUrl || loading"
                         class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
                         下载合集
                     </button>
                 </div>
 
-                <!-- 收藏下载 -->
+                <!-- 收藏下载（仅此处需登录） -->
                 <div class="flex items-center gap-3 pt-2 border-t border-gray-100">
                     <span class="text-gray-700 w-24 shrink-0">收藏文章 🔒</span>
-                    <span x-text="loggedIn ? '✅ 已登录' : '❌ 未登录'" class="text-sm" :class="loggedIn ? 'text-green-600' : 'text-red-500'"></span>
                     <button @click="showLoginModal = true" class="text-sm text-primary-600 hover:text-primary-800 underline">管理登录</button>
-                    <button @click="downloadFavorites()" :disabled="!loggedIn || loading"
+                    <button @click="downloadFavorites()" :disabled="loading"
                         class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium ml-auto">
                         下载收藏
                     </button>
+                    <span x-show="verifyMessage" class="text-xs" :class="verifyMessage.includes('✅') ? 'text-green-600' : 'text-red-500'" x-text="verifyMessage"></span>
                 </div>
             </div>
         </section>
@@ -194,7 +192,7 @@
                 </div>
 
                 <!-- 验证结果 -->
-                <div x-show="loginMessage" class="mt-4 p-3 rounded-lg text-sm" :class="loginMessage.includes('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'" x-text="loginMessage"></div>
+                <div x-show="loginMessage || verifyMessage" class="mt-4 p-3 rounded-lg text-sm" :class="(loginMessage || verifyMessage).includes('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'" x-text="loginMessage || verifyMessage"></div>
                 <div x-show="userInfo" class="mt-3 p-3 bg-blue-50 rounded-lg text-sm text-blue-800">
                     ✅ 已认证：<span class="font-medium" x-text="userInfo"></span>
                 </div>
@@ -220,7 +218,10 @@
                 tokenInput: '',
                 showLoginModal: false,
                 loginMessage: '',
+                verifyMessage: '',
                 loggedIn: false,
+                hasToken: false,
+                hasCookie: false,
                 authMode: '',
                 userInfo: '',
                 authTab: 'token',
@@ -257,8 +258,10 @@
                     try {
                         const resp = await fetch('/api/login/status');
                         const data = await resp.json();
-                        this.loggedIn = data.logged_in;
+                        this.hasToken = data.has_token;
+                        this.hasCookie = data.has_cookie;
                         this.authMode = data.auth_mode || '';
+                        this.loggedIn = data.has_token;
                     } catch (e) {
                         console.error('检查登录失败', e);
                     }
@@ -267,19 +270,21 @@
                 // 验证登录
                 async verifyLogin() {
                     try {
+                        this.verifyMessage = '⏳ 验证中...';
                         const resp = await fetch('/api/login/verify', { method: 'POST' });
                         const data = await resp.json();
                         if (data.ok) {
-                            this.loginMessage = '✅ 验证成功';
+                            this.verifyMessage = '✅ 已认证: ' + (data.user?.blogName || '');
                             this.userInfo = data.user?.blogName || '已认证';
                             this.loggedIn = true;
                             this.authMode = data.auth_mode;
                         } else {
-                            this.loginMessage = '❌ ' + (data.error || '验证失败');
+                            this.verifyMessage = '❌ ' + (data.error || '验证失败');
                             this.userInfo = '';
+                            this.loggedIn = false;
                         }
                     } catch (e) {
-                        this.loginMessage = '❌ 网络错误';
+                        this.verifyMessage = '❌ 网络错误';
                     }
                 },
 
