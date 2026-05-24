@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import webbrowser
-from pathlib import Path
 
 import uvicorn
 
@@ -23,9 +22,8 @@ def main() -> None:
 
     webbrowser.open(f"http://{host}:{port}")
 
-    config_path = Path(__file__).parent / "web" / "server.py"
     uvicorn.run(
-        f"{config_path.stem}:app",
+        "lofter_downloader.web.server:app",
         host=host,
         port=port,
         reload=False,

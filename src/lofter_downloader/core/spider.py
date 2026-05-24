@@ -38,11 +38,14 @@ class Spider(ABC):
         self._semaphore = asyncio.Semaphore(settings.max_concurrency)
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """获取或创建异步 HTTP 客户端。"""
+        """获取或创建异步 HTTP 客户端（含 Cookie 支持）。"""
         if self._client is None:
+            headers: dict[str, str] = {"User-Agent": self.USER_AGENT}
+            if settings.cookie:
+                headers["Cookie"] = settings.cookie
             self._client = httpx.AsyncClient(
                 timeout=settings.request_timeout,
-                headers={"User-Agent": self.USER_AGENT},
+                headers=headers,
             )
         return self._client
 

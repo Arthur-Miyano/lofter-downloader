@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from lofter_downloader.config import settings
 from lofter_downloader.core.task_manager import Task, TaskStatus, task_manager
+from lofter_downloader.utils.exceptions import TaskCanceledError
 from lofter_downloader.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -177,15 +178,25 @@ async def _run_download_post(task_id: str, url: str) -> None:
     from lofter_downloader.storage.saver import PostSaver
 
     task_manager.set_status(task_id, TaskStatus.RUNNING)
+    downloader: PostDownloader | None = None
+    saver: PostSaver | None = None
     try:
+        await task_manager.wait_for_cancel(task_id)
         downloader = PostDownloader()
         saver = PostSaver()
         post = await downloader.run(url)
         await saver.save(post, sub_dir="单篇下载")
         task_manager.set_result(task_id, {"title": post.title, "url": post.url})
+    except TaskCanceledError:
+        pass
     except Exception as exc:
         logger.exception("Download post failed")
         task_manager.set_error(task_id, str(exc))
+    finally:
+        if downloader is not None:
+            await downloader.close()
+        if saver is not None:
+            await saver.close()
 
 
 async def _run_download_blog(task_id: str, user_id: int) -> None:
@@ -194,17 +205,28 @@ async def _run_download_blog(task_id: str, user_id: int) -> None:
     from lofter_downloader.storage.saver import PostSaver
 
     task_manager.set_status(task_id, TaskStatus.RUNNING)
+    downloader: BlogDownloader | None = None
+    saver: PostSaver | None = None
     try:
+        await task_manager.wait_for_cancel(task_id)
         downloader = BlogDownloader()
         saver = PostSaver()
         posts = await downloader.run(user_id)
         for idx, post in enumerate(posts):
+            await task_manager.wait_for_cancel(task_id)
             task_manager.update_progress(task_id, idx + 1, len(posts), post.title)
             await saver.save(post, sub_dir=str(user_id))
         task_manager.set_result(task_id, {"total": len(posts)})
+    except TaskCanceledError:
+        pass
     except Exception as exc:
         logger.exception("Download blog failed")
         task_manager.set_error(task_id, str(exc))
+    finally:
+        if downloader is not None:
+            await downloader.close()
+        if saver is not None:
+            await saver.close()
 
 
 async def _run_download_collection(task_id: str, url: str) -> None:
@@ -213,17 +235,28 @@ async def _run_download_collection(task_id: str, url: str) -> None:
     from lofter_downloader.storage.saver import PostSaver
 
     task_manager.set_status(task_id, TaskStatus.RUNNING)
+    downloader: CollectionDownloader | None = None
+    saver: PostSaver | None = None
     try:
+        await task_manager.wait_for_cancel(task_id)
         downloader = CollectionDownloader()
         saver = PostSaver()
         posts = await downloader.run(url)
         for idx, post in enumerate(posts):
+            await task_manager.wait_for_cancel(task_id)
             task_manager.update_progress(task_id, idx + 1, len(posts), post.title)
             await saver.save(post, sub_dir="合集")
         task_manager.set_result(task_id, {"total": len(posts)})
+    except TaskCanceledError:
+        pass
     except Exception as exc:
         logger.exception("Download collection failed")
         task_manager.set_error(task_id, str(exc))
+    finally:
+        if downloader is not None:
+            await downloader.close()
+        if saver is not None:
+            await saver.close()
 
 
 async def _run_download_favorites(task_id: str) -> None:
@@ -232,14 +265,25 @@ async def _run_download_favorites(task_id: str) -> None:
     from lofter_downloader.storage.saver import PostSaver
 
     task_manager.set_status(task_id, TaskStatus.RUNNING)
+    downloader: FavoritesDownloader | None = None
+    saver: PostSaver | None = None
     try:
+        await task_manager.wait_for_cancel(task_id)
         downloader = FavoritesDownloader(cookie=settings.cookie)
         saver = PostSaver()
         posts = await downloader.run()
         for idx, post in enumerate(posts):
+            await task_manager.wait_for_cancel(task_id)
             task_manager.update_progress(task_id, idx + 1, len(posts), post.title)
             await saver.save(post, sub_dir="收藏文章")
         task_manager.set_result(task_id, {"total": len(posts)})
+    except TaskCanceledError:
+        pass
     except Exception as exc:
         logger.exception("Download favorites failed")
         task_manager.set_error(task_id, str(exc))
+    finally:
+        if downloader is not None:
+            await downloader.close()
+        if saver is not None:
+            await saver.close()

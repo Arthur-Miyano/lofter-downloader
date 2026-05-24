@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from lofter_downloader.config import settings
 from lofter_downloader.core.post import Post, PostDownloader
 from lofter_downloader.core.spider import Spider
 from lofter_downloader.utils.logger import setup_logger
@@ -20,6 +21,8 @@ class FavoritesDownloader(Spider):
     def __init__(self, cookie: str) -> None:
         super().__init__()
         self._cookie = cookie
+        if cookie:
+            settings.cookie = cookie
         self._post_downloader = PostDownloader()
 
     async def run(self) -> list[Post]:  # type: ignore[override]
