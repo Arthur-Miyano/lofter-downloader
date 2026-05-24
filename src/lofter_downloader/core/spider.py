@@ -14,7 +14,11 @@ import httpx
 from bs4 import BeautifulSoup
 
 from lofter_downloader.config import settings
-from lofter_downloader.utils.exceptions import NetworkError, ParseError
+from lofter_downloader.utils.exceptions import (
+    LoginRequiredError,
+    NetworkError,
+    ParseError,
+)
 from lofter_downloader.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -49,8 +53,14 @@ class Spider(ABC):
             )
         return self._client
 
+    LOGIN_PAGE_MARKERS = [
+        "/front/login",
+        "LOFTER - 让兴趣，更有趣",
+        "lofter-root-container",
+    ]
+
     async def fetch(self, url: str) -> str:
-        """发送 GET 请求，带重试和限速。
+        """发送 GET 请求，带重试、限速和登录检测。
 
         Parameters
         ----------
@@ -66,6 +76,8 @@ class Spider(ABC):
         ------
         NetworkError
             超过最大重试次数后仍失败
+        LoginRequiredError
+            检测到被重定向到登录页时抛出
         """
         client = await self._get_client()
         last_exc: Exception | None = None
@@ -78,7 +90,9 @@ class Spider(ABC):
                     )
                     resp = await client.get(url, follow_redirects=True)
                     resp.raise_for_status()
-                    return resp.text
+                    text = resp.text
+                    self._check_login_page(text)
+                    return text
 
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
@@ -93,6 +107,21 @@ class Spider(ABC):
         raise NetworkError(
             f"Failed after {settings.max_retries} attempts: {url}",
         ) from last_exc
+
+    @staticmethod
+    def _check_login_page(html: str) -> None:
+        """检测页面是否为 LOFTER 登录页面。
+
+        Raises
+        ------
+        LoginRequiredError
+            检测到登录页特征时抛出
+        """
+        for marker in Spider.LOGIN_PAGE_MARKERS:
+            if marker in html[:2000]:
+                raise LoginRequiredError(
+                    "LOFTER 需要登录才能访问，请先导入 Cookie"
+                )
 
     @staticmethod
     def parse_html(html: str) -> BeautifulSoup:

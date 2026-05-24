@@ -42,17 +42,28 @@
             </div>
         </header>
 
+        <!-- 登录提示 -->
+        <div x-show="!loggedIn"
+            class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <span class="text-amber-600 text-lg">⚠️</span>
+            <div>
+                <p class="text-amber-800 font-medium">LOFTER 当前要求登录后才能访问文章内容</p>
+                <p class="text-amber-600 text-sm mt-1">请先点击右上角 <button @click="showLoginModal = true" class="text-primary-600 underline">导入 Cookie</button> 登录后再使用下载功能</p>
+            </div>
+        </div>
+
         <!-- 快速下载：单篇文章 -->
         <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
             <h2 class="text-lg font-semibold text-gray-800 mb-4">📄 快速下载</h2>
             <div class="flex gap-3">
                 <input type="url" x-model="singleUrl" placeholder="粘贴 LOFTER 文章链接..."
                     class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                <button @click="downloadSingle()" :disabled="!singleUrl || loading"
+                <button @click="downloadSingle()" :disabled="!singleUrl || !loggedIn || loading"
                     class="px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
                     下载
                 </button>
             </div>
+            <p class="text-xs text-gray-400 mt-2">所有功能均需要 <button @click="showLoginModal = true" class="text-primary-600 underline">导入 Cookie</button> 登录后才能使用</p>
         </section>
 
         <!-- 批量下载 -->
@@ -64,7 +75,7 @@
                     <span class="text-gray-700 w-24 shrink-0">作者数字 ID</span>
                     <input type="number" x-model="userId" placeholder="输入作者数字 ID"
                         class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                    <button @click="downloadBlog()" :disabled="!userId || loading"
+                    <button @click="downloadBlog()" :disabled="!userId || !loggedIn || loading"
                         class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
                         下载全部
                     </button>
@@ -75,7 +86,7 @@
                     <span class="text-gray-700 w-24 shrink-0">合集链接</span>
                     <input type="url" x-model="collectionUrl" placeholder="粘贴合集页面链接"
                         class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                    <button @click="downloadCollection()" :disabled="!collectionUrl || loading"
+                    <button @click="downloadCollection()" :disabled="!collectionUrl || !loggedIn || loading"
                         class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
                         下载合集
                     </button>
@@ -260,88 +271,53 @@
                     }
                 },
 
-                // 下载单篇
-                async downloadSingle() {
-                    if (!this.singleUrl) return;
+                async _handleDownload(url, body) {
                     this.loading = true;
                     try {
-                        const resp = await fetch('/api/download/post', {
+                        const resp = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url: this.singleUrl })
+                            body: JSON.stringify(body)
                         });
                         const data = await resp.json();
                         if (data.task_id) {
-                            this.singleUrl = '';
                             this.loadTasks();
+                        } else if (data.error) {
+                            alert(data.error);
                         }
                     } catch (e) {
-                        alert('下载失败');
+                        alert('网络错误，下载请求失败');
                     } finally {
                         this.loading = false;
                     }
+                },
+
+                // 下载单篇
+                async downloadSingle() {
+                    if (!this.singleUrl) return;
+                    const url = this.singleUrl;
+                    this.singleUrl = '';
+                    await this._handleDownload('/api/download/post', { url: url });
                 },
 
                 // 下载博客全部
                 async downloadBlog() {
                     if (!this.userId) return;
-                    this.loading = true;
-                    try {
-                        const resp = await fetch('/api/download/blog', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ user_id: parseInt(this.userId) })
-                        });
-                        const data = await resp.json();
-                        if (data.task_id) {
-                            this.loadTasks();
-                        }
-                    } catch (e) {
-                        alert('下载失败');
-                    } finally {
-                        this.loading = false;
-                    }
+                    await this._handleDownload('/api/download/blog', { user_id: parseInt(this.userId) });
                 },
 
                 // 下载合集
                 async downloadCollection() {
                     if (!this.collectionUrl) return;
-                    this.loading = true;
-                    try {
-                        const resp = await fetch('/api/download/collection', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url: this.collectionUrl })
-                        });
-                        const data = await resp.json();
-                        if (data.task_id) {
-                            this.collectionUrl = '';
-                            this.loadTasks();
-                        }
-                    } catch (e) {
-                        alert('下载失败');
-                    } finally {
-                        this.loading = false;
-                    }
+                    const url = this.collectionUrl;
+                    this.collectionUrl = '';
+                    await this._handleDownload('/api/download/collection', { url: url });
                 },
 
                 // 下载收藏
                 async downloadFavorites() {
                     if (!this.loggedIn) return;
-                    this.loading = true;
-                    try {
-                        const resp = await fetch('/api/download/favorites', { method: 'POST' });
-                        const data = await resp.json();
-                        if (data.task_id) {
-                            this.loadTasks();
-                        } else {
-                            alert(data.error || '下载失败');
-                        }
-                    } catch (e) {
-                        alert('下载失败');
-                    } finally {
-                        this.loading = false;
-                    }
+                    await this._handleDownload('/api/download/favorites', {});
                 },
 
                 // 取消任务

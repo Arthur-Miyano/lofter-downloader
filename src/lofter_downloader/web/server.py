@@ -62,9 +62,19 @@ async def logout():
     return {"ok": True}
 
 
+def _require_login() -> dict | None:
+    """检查是否已导入 Cookie，未登录时返回错误响应。"""
+    if not settings.cookie:
+        return {"ok": False, "error": "请先导入 Cookie 登录后才能使用下载功能"}
+    return None
+
+
 @app.post("/api/download/post")
 async def download_post(data: dict):
     """下载单篇文章。"""
+    err = _require_login()
+    if err:
+        return err
     url = data.get("url", "")
     if not url:
         return {"ok": False, "error": "URL 不能为空"}
@@ -76,6 +86,9 @@ async def download_post(data: dict):
 @app.post("/api/download/blog")
 async def download_blog(data: dict):
     """下载作者全部文章。"""
+    err = _require_login()
+    if err:
+        return err
     user_id = data.get("user_id", 0)
     if not user_id:
         return {"ok": False, "error": "user_id 不能为空"}
@@ -87,6 +100,9 @@ async def download_blog(data: dict):
 @app.post("/api/download/collection")
 async def download_collection(data: dict):
     """下载合集。"""
+    err = _require_login()
+    if err:
+        return err
     url = data.get("url", "")
     if not url:
         return {"ok": False, "error": "URL 不能为空"}
@@ -98,8 +114,9 @@ async def download_collection(data: dict):
 @app.post("/api/download/favorites")
 async def download_favorites():
     """下载收藏文章。"""
-    if not settings.cookie:
-        return {"ok": False, "error": "请先登录"}
+    err = _require_login()
+    if err:
+        return err
     task_id = task_manager.create_task("favorites", {})
     asyncio.create_task(_run_download_favorites(task_id))
     return {"task_id": task_id}
