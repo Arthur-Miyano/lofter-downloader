@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "lofter-downloader"
@@ -73,13 +73,11 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "ANN", "B", "SIM", "ARG", "C4", "T10"]
 ignore = [
-    "ANN101",
-    "ANN102",
     "ANN401",
     "ANN002",
     "ANN003",
 ]
-per-file-ignores = {"tests/*" = ["ANN"]}
+per-file-ignores = {"tests/*" = ["ANN"], "src/lofter_downloader/web/server.py" = ["ANN"]}
 
 [tool.mypy]
 strict = true
@@ -96,4 +94,5 @@ asyncio_mode = "auto"
 addopts = "-v --cov=src/lofter_downloader --cov-report=term-missing --cov-report=html"
 
 [tool.coverage.run]
-source = ["src/lofter_downloader"]
+source = ["lofter_downloader"]
+relative_files = true

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from lofter_downloader.core.spider import Spider
 from lofter_downloader.utils.exceptions import NetworkError
 

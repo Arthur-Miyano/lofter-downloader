@@ -70,7 +70,9 @@ class Spider(ABC):
         for attempt in range(1, settings.max_retries + 1):
             try:
                 async with self._semaphore:
-                    logger.debug("Fetching [%d/%d]: %s", attempt, settings.max_retries, url)
+                    logger.debug(
+                        "Fetching [%d/%d]: %s", attempt, settings.max_retries, url
+                    )
                     resp = await client.get(url, follow_redirects=True)
                     resp.raise_for_status()
                     return resp.text

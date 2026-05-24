@@ -42,7 +42,11 @@ class CollectionDownloader(Spider):
             post = await self._post_downloader.run(link)
             posts.append(post)
 
-        logger.info("Completed downloading collection: %s (%d posts)", collection_url, len(posts))
+        logger.info(
+            "Completed downloading collection: %s (%d posts)",
+            collection_url,
+            len(posts),
+        )
         return posts
 
     async def _collect_all_post_links(self, collection_url: str) -> list[str]:
@@ -59,7 +63,9 @@ class CollectionDownloader(Spider):
 
         return all_links
 
-    async def _get_post_links_from_page(self, collection_url: str, page: int) -> list[str]:
+    async def _get_post_links_from_page(
+        self, collection_url: str, page: int
+    ) -> list[str]:
         """从合集页面的指定页码提取文章链接。"""
         paginated_url = f"{collection_url}?page={page}"
         html = await self.fetch(paginated_url)
@@ -67,7 +73,7 @@ class CollectionDownloader(Spider):
 
         links: list[str] = []
         for tag in soup.select("a[href*='/post/']"):
-            href = tag.get("href", "")
+            href = str(tag.get("href", ""))
             if href and href not in links:
                 links.append(href)
 

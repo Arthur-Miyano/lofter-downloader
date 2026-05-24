@@ -35,16 +35,16 @@ def _default_post_html() -> str:
     """默认的文章样本 HTML（无 fixture 文件时使用）。"""
     return """<!DOCTYPE html>
 <html>
-<head><title>测试文章</title></head>
+<head><title>旅行的意义</title></head>
 <body>
 <div class="post">
-    <h1 class="post_title">我的旅行日记</h1>
-    <span class="author">旅行者小明</span>
-    <span class="date">2024-01-15</span>
+    <h1 class="post_title">旅行的意义</h1>
+    <span class="author">背包客小王</span>
+    <span class="date">2024-03-15</span>
     <div class="post_content">
-        <p>今天去了一个美丽的地方。</p>
-        <img src="http://example.com/image1.jpg" alt="photo1">
-        <img src="http://example.com/image2.png" alt="photo2">
+        <p>今天分享一次难忘的云南之旅。</p>
+        <img src="https://example.com/dali.jpg" alt="大理">
+        <img src="https://example.com/erhai.png" alt="洱海">
     </div>
 </div>
 </body>
@@ -55,14 +55,15 @@ def _default_blog_html() -> str:
     """默认的博客样本 HTML（无 fixture 文件时使用）。"""
     return """<!DOCTYPE html>
 <html>
-<head><title>旅行者小明的博客</title></head>
+<head><title>背包客小王的博客</title></head>
 <body>
 <script>
-window.globalData = {"userId": 12345, "blogName": "traveler_xiao"};
+window.globalData = {"userId": 67890, "blogName": "backpacker_wang"};
 </script>
 <div class="posts">
-    <a href="https://traveler.lofter.com/post/1">第一篇文章</a>
-    <a href="https://traveler.lofter.com/post/2">第二篇文章</a>
+    <a href="https://backpacker_wang.lofter.com/post/1">旅行的意义</a>
+    <a href="https://backpacker_wang.lofter.com/post/2">美食探店</a>
+    <a href="https://backpacker_wang.lofter.com/post/3">摄影技巧分享</a>
 </div>
 </body>
 </html>"""

@@ -22,6 +22,21 @@ class UserResolver(Spider):
     通过解析 LOFTER 博客页面中的 JavaScript 数据，实现数字 ID 与域名的转换。
     """
 
+    async def run(self, user_id: int) -> str:  # type: ignore[override]
+        """解析用户数字 ID 为博客域名。
+
+        Parameters
+        ----------
+        user_id : int
+            LOFTER 用户数字 ID
+
+        Returns
+        -------
+        str
+            博客域名
+        """
+        return await self.resolve_domain(user_id)
+
     async def resolve_domain(self, user_id: int) -> str:
         """根据数字用户 ID 获取博客域名。
 

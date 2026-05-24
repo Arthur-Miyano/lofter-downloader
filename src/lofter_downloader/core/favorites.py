@@ -65,7 +65,7 @@ class FavoritesDownloader(Spider):
 
         links: list[str] = []
         for tag in soup.select("a[href*='/post/']"):
-            href = tag.get("href", "")
+            href = str(tag.get("href", ""))
             if href and href not in links:
                 links.append(href)
 

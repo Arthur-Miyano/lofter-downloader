@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lofter_downloader.core.task_manager import TaskManager, TaskStatus
 
 

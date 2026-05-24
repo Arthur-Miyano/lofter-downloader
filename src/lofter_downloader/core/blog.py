@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from lofter_downloader.core.post import Post, PostDownloader
 from lofter_downloader.core.resolver import UserResolver
 from lofter_downloader.core.spider import Spider
@@ -37,7 +35,9 @@ class BlogDownloader(Spider):
             所有文章的列表
         """
         domain = await self._resolver.resolve_domain(user_id)
-        logger.info("Downloading all posts from blog: %s (user_id: %d)", domain, user_id)
+        logger.info(
+            "Downloading all posts from blog: %s (user_id: %d)", domain, user_id
+        )
 
         post_links = await self._collect_all_post_links(domain)
         logger.info("Found %d posts in blog: %s", len(post_links), domain)
@@ -72,7 +72,7 @@ class BlogDownloader(Spider):
 
         links: list[str] = []
         for tag in soup.select("a[href*='/post/']"):
-            href = tag.get("href", "")
+            href = str(tag.get("href", ""))
             if href and href not in links:
                 links.append(href)
 

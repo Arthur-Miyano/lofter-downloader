@@ -8,7 +8,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    Engine,
+    Float,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Session
 
 from lofter_downloader.config import settings
@@ -45,7 +55,7 @@ class LoginSession(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
-def get_engine(db_path: Path | None = None) -> object:
+def get_engine(db_path: Path | None = None) -> Engine:
     """获取数据库引擎。
 
     Parameters
@@ -65,6 +75,6 @@ def get_engine(db_path: Path | None = None) -> object:
     return engine
 
 
-def get_session(engine: object) -> Session:
+def get_session(engine: Engine) -> Session:
     """获取数据库会话。"""
     return Session(engine)
