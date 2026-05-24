@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOFTER 文章下载器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { primary: {50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a'} } } }
+        }
+    </script>
+    <style>
+        .dark { background-color: #1a1a2e; color: #e0e0e0; }
+        .dark .bg-white { background-color: #16213e; }
+        .dark .text-gray-700 { color: #c0c0c0; }
+        .dark .text-gray-500 { color: #9ca3af; }
+        .dark .border-gray-200 { border-color: #2a2a4a; }
+        .dark .hover\:bg-gray-50:hover { background-color: #1a1a3e; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen" x-data="app()">
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <!-- 头部 -->
+        <header class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-primary-700">LOFTER 文章下载器</h1>
+                <p class="text-gray-500 mt-1">下载网易 LOFTER 文章，保存为 Markdown 格式</p>
+            </div>
+            <button @click="toggleDark()" class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                <span x-text="isDark ? '☀️' : '🌙'" class="text-xl"></span>
+            </button>
+        </header>
+
+        <!-- LOFTER 全站登录提示 -->
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-3">
+            <span class="text-amber-600 text-lg">⚠️</span>
+            <div>
+                <p class="text-amber-800 font-medium">LOFTER 要求全站登录</p>
+                <p class="text-amber-600 text-sm mt-1">所有下载均需先登录 LOFTER 账号（含拼图验证码），登录一次后自动保持</p>
+            </div>
+        </div>
+
+        <!-- 登录区域 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">🔑 登录</h2>
+            <div x-show="!loggedIn" class="space-y-3">
+                <p class="text-sm text-gray-600">点击下方按钮启动浏览器窗口，在浏览器中手动登录 LOFTER（需完成拼图验证码），完成后点击「检查登录」。</p>
+                <div class="flex gap-3">
+                    <button @click="startLogin()" :disabled="loginLoading"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 font-medium">
+                        🚀 启动浏览器登录
+                    </button>
+                    <button @click="checkLoginStatus()" :disabled="loginLoading"
+                        class="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium">
+                        ✅ 检查登录
+                    </button>
+                </div>
+                <p x-show="loginMessage" class="text-sm" :class="loginMessageClass" x-text="loginMessage"></p>
+            </div>
+            <div x-show="loggedIn" class="space-y-3">
+                <div class="flex items-center gap-3">
+                    <span class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-primary-100 text-primary-700 font-bold text-lg"
+                        x-text="userName ? userName[0].toUpperCase() : '?'"></span>
+                    <div>
+                        <p class="text-green-700 font-medium text-sm" x-text="userName ? '已登录: @' + userName : '✅ 登录会话有效'"></p>
+                        <p class="text-gray-500 text-xs">可正常使用所有下载功能</p>
+                    </div>
+                </div>
+                <button @click="clearLogin()"
+                    class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium text-sm">
+                    清除登录
+                </button>
+            </div>
+        </section>
+
+        <!-- 单篇文章 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📄 单篇文章下载</h2>
+            <div class="flex gap-3">
+                <input type="url" x-model="singleUrl" placeholder="粘贴 LOFTER 文章链接..."
+                    class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
+                <button @click="downloadSingle()" :disabled="!singleUrl || loading"
+                    class="px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
+                    下载
+                </button>
+            </div>
+        </section>
+
+        <!-- 批量下载 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📋 批量下载</h2>
+            <div class="space-y-4">
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700 w-24 shrink-0">作者数字 ID</span>
+                    <input type="text" inputmode="numeric" x-model="userId" placeholder="输入作者数字 ID（如 12345678）"
+                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
+                    <button @click="downloadBlog()" :disabled="!userId || loading"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
+                        下载全部
+                    </button>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700 w-24 shrink-0">合集链接</span>
+                    <input type="url" x-model="collectionUrl" placeholder="粘贴合集页面链接"
+                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
+                    <button @click="downloadCollection()" :disabled="!collectionUrl || loading"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
+                        下载合集
+                    </button>
+                </div>
+
+                <div class="flex items-center gap-3 pt-2 border-t border-gray-100">
+                    <span class="text-gray-700 w-24 shrink-0">收藏文章 🔒</span>
+                    <span x-show="!loggedIn" class="text-sm text-amber-600">需先登录</span>
+                    <button @click="downloadFavorites()" :disabled="loading || !loggedIn"
+                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium ml-auto">
+                        下载收藏
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 下载任务 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📊 下载任务</h2>
+            <div x-show="tasks.length === 0" class="text-gray-400 text-center py-8">
+                暂无下载任务
+            </div>
+            <div class="space-y-3">
+                <template x-for="task in tasks" :key="task.task_id">
+                    <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <div>
+                                <span class="font-medium text-gray-800" x-text="typeLabel(task.type)"></span>
+                                <span class="text-sm text-gray-500 ml-2" x-text="task.message"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm px-2 py-0.5 rounded" :class="statusClass(task.status)" x-text="statusText(task.status)"></span>
+                                <button @click="cancelTask(task.task_id)" x-show="task.status === 'running'" class="text-red-500 hover:text-red-700 text-sm">取消</button>
+                            </div>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div class="bg-primary-600 h-2 rounded-full transition-all duration-500" :style="'width: ' + Math.round(task.progress * 100) + '%'"></div>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-400 mt-1">
+                            <span x-text="Math.round(task.progress * 100) + '%'"></span>
+                            <span x-text="task.current ? task.current + '/' + task.total : ''"></span>
+                        </div>
+                        <p x-show="task.error" class="text-xs text-red-500 mt-1" x-text="task.error"></p>
+                    </div>
+                </template>
+            </div>
+        </section>
+
+        <!-- 已完成 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">📁 已完成</h2>
+            <div x-show="completedTasks.length === 0" class="text-gray-400 text-center py-8">
+                暂无已完成任务
+            </div>
+            <div class="space-y-2">
+                <template x-for="task in completedTasks" :key="task.task_id">
+                    <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-700" x-text="typeLabel(task.type)"></span>
+                            <span :class="task.status === 'failed' ? 'text-red-500' : 'text-green-700'" x-text="task.status === 'failed' ? '❌' : '✅'"></span>
+                            <span class="text-sm text-gray-500" x-text="task.error || task.message || (task.current + '/' + task.total)"></span>
+                        </div>
+                        <span class="text-xs text-gray-400" x-text="formatTime(task.created_at)"></span>
+                    </div>
+                </template>
+            </div>
+        </section>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script>
+        function app() {
+            return {
+                singleUrl: '',
+                userId: '',
+                collectionUrl: '',
+                loginMessage: '',
+                loggedIn: false,
+                userName: '',
+                loginLoading: false,
+                loading: false,
+                tasks: [],
+                isDark: false,
+                pollId: null,
+
+                get completedTasks() {
+                    return this.tasks.filter(t => ['completed', 'failed', 'canceled'].includes(t.status));
+                },
+
+                get loginMessageClass() {
+                    if (this.loginMessage.includes('✅')) return 'text-green-600';
+                    if (this.loginMessage.includes('❌')) return 'text-red-500';
+                    return 'text-blue-600';
+                },
+
+                init() {
+                    this.checkLogin();
+                    this.loadTasks();
+                    this.pollId = setInterval(() => this.loadTasks(), 2000);
+                    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+                    this.isDark = mq.matches;
+                    if (this.isDark) document.documentElement.classList.add('dark');
+                    mq.addEventListener('change', e => {
+                        this.isDark = e.matches;
+                        document.documentElement.classList.toggle('dark', e.matches);
+                    });
+                },
+
+                toggleDark() {
+                    this.isDark = !this.isDark;
+                    document.documentElement.classList.toggle('dark');
+                },
+
+                // --- 登录 ---
+
+                async checkLogin() {
+                    try {
+                        const r = await fetch('/api/login/status');
+                        const d = await r.json();
+                        this.loggedIn = d.logged_in;
+                        if (d.user_name) this.userName = d.user_name;
+                    } catch (e) { console.error(e); }
+                },
+
+                async startLogin() {
+                    this.loginLoading = true;
+                    this.loginMessage = '⏳ 正在启动浏览器…';
+                    try {
+                        const r = await fetch('/api/login/start', { method: 'POST' });
+                        const d = await r.json();
+                        this.loginMessage = d.ok ? '🌐 浏览器已打开，请完成登录后点击「检查登录」' : ('❌ ' + (d.error || '启动失败'));
+                    } catch (e) {
+                        this.loginMessage = '❌ 网络错误';
+                    } finally { this.loginLoading = false; }
+                },
+
+                async checkLoginStatus() {
+                    this.loginLoading = true;
+                    this.loginMessage = '⏳ 检查中…';
+                    try {
+                        const r = await fetch('/api/login/check', { method: 'POST' });
+                        const d = await r.json();
+                        if (d.logged_in) {
+                            this.loggedIn = true;
+                            if (d.user_name) this.userName = d.user_name;
+                            this.loginMessage = '✅ 登录成功！';
+                        } else {
+                            this.loginMessage = '⏳ 尚未检测到登录，请确认已在浏览器中完成登录';
+                        }
+                    } catch (e) {
+                        this.loginMessage = '❌ 网络错误';
+                    } finally { this.loginLoading = false; }
+                },
+
+                async clearLogin() {
+                    await fetch('/api/login', { method: 'DELETE' });
+                    this.loggedIn = false;
+                    this.userName = '';
+                    this.loginMessage = '';
+                },
+
+                // --- 下载 ---
+
+                async downloadSingle() {
+                    if (!this.singleUrl) return;
+                    const u = this.singleUrl; this.singleUrl = '';
+                    await this._send('/api/download/post', { url: u });
+                },
+
+                async downloadBlog() {
+                    if (!this.userId) return;
+                    await this._send('/api/download/blog', { user_id: this.userId });
+                },
+
+                async downloadCollection() {
+                    if (!this.collectionUrl) return;
+                    const u = this.collectionUrl; this.collectionUrl = '';
+                    await this._send('/api/download/collection', { url: u });
+                },
+
+                async downloadFavorites() {
+                    if (!this.loggedIn) return;
+                    await this._send('/api/download/favorites', {});
+                },
+
+                async _send(url, body) {
+                    this.loading = true;
+                    try {
+                        const r = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        });
+                        const d = await r.json();
+                        if (!d.task_id && d.error) alert(d.error);
+                        this.loadTasks();
+                    } catch (e) { alert('网络错误'); }
+                    finally { this.loading = false; }
+                },
+
+                // --- 任务 ---
+
+                async loadTasks() {
+                    try {
+                        const r = await fetch('/api/tasks');
+                        this.tasks = await r.json();
+                    } catch (e) { /* ignore poll errors */ }
+                },
+
+                async cancelTask(id) {
+                    await fetch(`/api/tasks/${id}/cancel`, { method: 'POST' });
+                    this.loadTasks();
+                },
+
+                typeLabel(t) {
+                    return { post: '单篇', blog: '作者全部', collection: '合集', favorites: '收藏' }[t] || t;
+                },
+
+                statusClass(s) {
+                    return {
+                        pending: 'bg-gray-100 text-gray-600',
+                        running: 'bg-blue-100 text-blue-700',
+                        completed: 'bg-green-100 text-green-700',
+                        failed: 'bg-red-100 text-red-700',
+                        canceled: 'bg-yellow-100 text-yellow-700'
+                    }[s] || 'bg-gray-100 text-gray-600';
+                },
+
+                statusText(s) {
+                    return { pending: '等待中', running: '下载中', completed: '已完成', failed: '失败', canceled: '已取消' }[s] || s;
+                },
+
+                formatTime(iso) {
+                    if (!iso) return '';
+                    const d = new Date(iso);
+                    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+                }
+            }
+        }
+    </script>
+</body>
+</html>

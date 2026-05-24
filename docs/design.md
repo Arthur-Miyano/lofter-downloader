@@ -1,487 +1,334 @@
-# LOFTER 文章下载器 — 系统设计方案
+# LOFTER 下载器 — 技术设计文档
 
-> 版本：0.1.0 | 更新日期：2026-05-24
+> 版本：1.0.1 | 日期：2026-05-24
 
----
+## 一、技术栈
 
-## 一、项目概述
+| 层次 | 选型 | 说明 |
+|------|------|------|
+| Web 框架 | Flask 3.x | 同步框架，Werkzeug 多线程开发服务器 |
+| 前端 | Alpine.js + Tailwind CSS | CDN 引入，零构建 |
+| 浏览器自动化 | Playwright (Python async API) | 加载 SPA 页面、执行 JS 提取 |
+| HTML 解析 | BeautifulSoup4 + lxml | 从 `page.content()` 解析 DOM |
+| 图片下载 | httpx (async) | 携带 session cookie + Referer 头 |
+| 登录持久化 | storageState JSON | Playwright 原生格式 |
+| 任务追踪 | 内存 dict + threading.Lock | 单用户，无需持久化 |
 
-### 1.1 项目目标
-
-开发一款专门针对网易 LOFTER（乐乎）平台的文章下载软件，支持以下四类下载场景：
-
-| 编号 | 功能 | 说明 | 登录要求 |
-|---|---|---|---|
-| F1 | 下载用户收藏的全部文章 | 访问 LOFTER 收藏页，遍历所有收藏文章 | ✅ 必须 |
-| F2 | 下载合集中全部文章 | 根据合集链接，自动检索并下载合集内文章 | ❌ 无需 |
-| F3 | 下载作者全部文章 | 根据用户数字 ID，下载该作者所有公开发布文章 | ❌ 无需 |
-| F4 | 下载单篇文章 | 根据文章链接下载单篇 | ❌ 无需 |
-
-### 1.2 技术栈
-
-| 层次 | 技术选型 | 说明 |
-|---|---|---|
-| 语言 | Python >= 3.10 | 类型注解 + asyncio 异步 |
-| Web 框架 | FastAPI + Uvicorn | 后端服务 |
-| 前端 | Tailwind CSS + Alpine.js | 零构建工具，CDN 引入 |
-| 爬虫 | httpx + BeautifulSoup4 + lxml | 异步 HTTP + HTML 解析 |
-| 存储 | aiofiles + SQLite（SQLAlchemy） | 文件系统 + 数据库 |
-| 格式 | Markdown（markdownify 转换） | 文章输出格式 |
-| 测试 | pytest + pytest-cov + pytest-mock | 测试基础设施 |
-| 文档 | MkDocs + mkdocstrings | 自动生成 API 文档 |
-| CI/CD | GitHub Actions | 自动化质量检查与发布 |
-
-### 1.3 项目结构
+## 二、项目结构
 
 ```
 lofter-downloader/
-├── pyproject.toml              # 项目元数据、依赖、工具配置
-├── noxfile.py                  # Nox 多版本测试
-├── Dockerfile                  # Docker 镜像构建
-├── .env.example                # 环境变量模板
-├── .github/workflows/
-│   ├── ci.yml                  # CI：lint + typecheck + test
-│   └── cd.yml                  # CD：发布至 PyPI / Docker
+├── app.py                    # Flask 工厂函数 + CLI 入口
+├── config.py                 # 配置（手动 .env 解析，含容错）
+├── requirements.txt          # 7 个运行时依赖 + 3 个开发依赖
+│
+├── downloader/
+│   ├── browser.py            # BrowserManager（后台线程 + 事件循环）
+│   ├── auth.py               # 登录函数（无类）
+│   ├── pipeline.py           # DownloadPipeline（统一下载流程）
+│   ├── parser.py             # 文章解析（2 JS 策略 + 1 HTML 降级策略含 3 子策略）
+│   ├── models.py             # Post / Task 数据类 + TaskManager（线程安全）
+│   ├── saver.py              # Markdown + 图片存储
+│   └── exceptions.py         # 5 个自定义异常
+│
+├── web/
+│   ├── routes.py             # Flask Blueprint（全部 API 路由）
+│   └── templates/
+│       └── index.html        # SPA 前端
 │
 ├── docs/
-│   ├── mkdocs.yml
-│   ├── index.md
-│   └── ...
+│   ├── requirements.md       # 功能需求
+│   └── design.md             # 本文档
 │
-├── tests/
-│   ├── conftest.py
-│   ├── unit/
-│   ├── integration/
-│   ├── e2e/
-│   └── fixtures/
+└── tests/
+    ├── conftest.py
+    ├── test_parser.py        # 解析器单元测试
+    └── test_routes.py        # API 路由集成测试
+```
+
+## 三、核心架构：Flask 同步 + Playwright 异步
+
+**问题：** Flask 是同步框架，Playwright 是异步 API。
+
+**方案：** 后台守护线程运行独立的 asyncio 事件循环，Flask 请求线程通过 `asyncio.run_coroutine_threadsafe()` 提交任务。
+
+```
+┌─────────────────────────────┐     ┌──────────────────────────────┐
+│  Flask 请求线程（线程池）     │     │  浏览器事件循环线程（守护）    │
+│                             │     │                              │
+│  browser.submit(coro) ──────┼────►│  asyncio 事件循环            │
+│    .result(timeout=15) ◄────┼─────│  执行协程，返回结果           │
+│                             │     │                              │
+│  browser.submit_async(coro)─┼────►│  执行协程（不等待结果）       │
+│    （保存 future 用于取消）  │     │  更新 task_manager 内存状态   │
+└─────────────────────────────┘     └──────────────────────────────┘
+```
+
+- `submit(coro)` → 阻塞等待结果，用于登录检查等短操作
+- `submit_async(coro)` → 返回 `concurrent.futures.Future`，调用方保存引用用于后续取消操作
+
+**并发控制：** Flask 请求线程在创建新下载任务前检查是否有运行中任务。同一时间最多 1 个下载任务执行。
+
+## 四、模块设计
+
+### 4.1 `config.py` — 配置
+
+手动解析 `.env` 文件，无第三方依赖。暴露 8 个模块级变量：
+
+`DOWNLOAD_DIR`, `SESSION_PATH`, `REQUEST_INTERVAL`, `MAX_RETRIES`, `REQUEST_TIMEOUT`, `LOG_LEVEL`, `HOST`, `PORT`
+
+**容错要求：** `float()` / `int()` 转换需 try/except，非法值时回退到默认值并记录警告日志，不可崩溃。
+
+### 4.2 `downloader/browser.py` — 浏览器管理
+
+```
+BrowserManager
+├── start()              → 后台线程启动事件循环 + 启动 headless Chromium
+├── submit(coro)         → 提交协程，阻塞等待结果（线程安全）
+├── submit_async(coro)   → 提交协程，返回 Future 对象（线程安全）
+├── new_context(storage) → 创建 BrowserContext（加载 storageState）
+├── launch_headed()      → 临时启动可见浏览器（登录用，独立 Chromium 进程）
+└── stop()               → 关闭浏览器 + 停止事件循环（atexit 注册）
+```
+
+**设计要点：**
+- **双进程架构：** 单一 headless Chromium 用于下载（`self._browser`，持久化）。登录时通过 `launch_headed()` 启动第二个独立的 headed Chromium 进程（临时，登录成功后关闭）。这不是"模式切换"——Playwright 不支持运行时改变 headless 状态，必须启动独立进程
+- 下载使用 headless 模式（`self._browser`），通过 BrowserContext 隔离不同下载操作
+- 登录 headed 浏览器需 5 分钟超时机制：启动时注册 `asyncio.get_event_loop().call_later(300, close_headed)`，超时自动关闭并清理资源
+- 线程安全：`asyncio.run_coroutine_threadsafe` 是 Python 官方提供的线程间协程提交 API。`submit_async()` 返回的 Future 必须被调用方保存，用于实现真正的任务取消
+
+### 4.3 `downloader/auth.py` — 登录
+
+纯函数，无类：
+
+```
+load_storage_state(path) → dict | None    # 读取 session 文件
+start_login(playwright) → (browser, ctx, page)  # 启动 headed 浏览器登录
+check_login(page) → (bool, username, error_type?)  # 检查登录 + 提取用户名
+save_session(context, path)               # 持久化 storageState
+clear_session(path)                       # 删除 session 文件
+```
+
+**check_login 返回值扩展：** 考虑返回三元组 `(bool, username, error_type)`，其中 `error_type` 区分：`None`（成功）、`"not_logged_in"`（未完成登录）、`"network_error"`（网络故障）、`"timeout"`（超时），便于前端展示分类错误信息。
+
+### 4.4 `downloader/pipeline.py` — 统一下载管道
+
+当前实现 API（与早期设计不同，无统一 `run()` 方法）：
+
+```
+DownloadPipeline
+├── run_post(url) → list[dict]           # 单篇下载
+├── collect_blog_links(user_id) → list[str]    # 收集作者全部文章链接
+├── collect_collection_links(url) → list[str]  # 收集合集全部文章链接
+├── collect_favorites_links() → list[str]      # 收集收藏全部文章链接
 │
-└── src/
-    └── lofter_downloader/
-        ├── __init__.py
-        ├── __main__.py
-        ├── config.py              # pydantic-settings 配置
-        ├── core/
-        │   ├── spider.py          # 爬虫基类（异步 + 限速 + 重试）
-        │   ├── auth.py            # 登录模块（Cookie / 模拟登录）
-        │   ├── resolver.py        # 数字 ID ↔ 博客域名 解析
-        │   ├── post.py            # F4：单篇文章下载
-        │   ├── blog.py            # F3：作者全部文章下载
-        │   ├── collection.py      # F2：合集下载
-        │   ├── favorites.py       # F1：收藏下载
-        │   └── task_manager.py    # 异步任务调度
-        ├── storage/
-        │   └── saver.py           # Markdown + 图片存储
-        ├── models/
-        │   ├── schemas.py         # Pydantic 数据模型
-        │   └── database.py        # SQLAlchemy ORM
-        ├── web/
-        │   ├── server.py          # FastAPI 应用
-        │   ├── routes/            # API 路由
-        │   ├── templates/         # Jinja2 模板
-        │   └── static/            # CSS / JS
-        └── utils/
-            ├── logger.py          # logging 配置
-            └── exceptions.py      # 自定义异常层次
+├── _paginate(base_url) → list[str]      # 通用分页收集
+├── _resolve_domain(user_id) → str        # ID → 博客域名
+└── _resolve_favorites_url() → str        # 探测收藏页 URL
 ```
 
----
+**分页逻辑：** 从 page=1 开始递增，每页提取 `a[href*='/post/']` 链接，去重后追加。当某页无新链接时停止。
 
-## 二、架构设计
+**分页参数适配（待验证）：** 当前 `_paginated_url()` 统一使用 `page=N`。不同 LOFTER 页面类型可能使用不同参数名或分页方式（cursor-based、offset-based），需在集成测试中对每种下载类型验证。
 
-### 2.1 系统架构图
+**页面加载策略：**
+1. `page.goto(url, wait_until="load")` — 等待所有资源加载
+2. `page.wait_for_selector("a[href*='/post/'], .post_content, article", timeout=15000)` — 等待 SPA 渲染内容（仅分页遍历使用）
+3. `asyncio.sleep(2)` — React hydration 缓冲（仅分页遍历使用）
 
-```mermaid
-flowchart TB
-    User["用户浏览器<br/>(Tailwind + Alpine.js)"]
-    API["FastAPI REST + WebSocket"]
-    Task["任务调度器<br/>(asyncio)"]
-    Spider["爬虫引擎<br/>(httpx + BS4)"]
-    Storage["存储层<br/>(文件系统 + SQLite)"]
+**注意：** `run_post()` 当前仅执行步骤 1（无 selector 等待和无 hydration 缓冲），在 SPA 渲染较慢时可能导致 Strategy 3（BS4 HTML 降级）拿到 hydration 前的空白 DOM。JS 提取策略（strategy 1/2）不受影响（数据嵌入在 HTML 源码中）。需评估是否为 `run_post()` 添加与分页遍历相同的等待逻辑。
 
-    User <-->|HTTP / WS| API
-    API --> Task
-    Task --> Spider
-    Spider -->|Markdown + 图片| Storage
-    Task -->|进度推送| API
-    API -->|实时更新| User
-```
+**错误韧性：** 批量下载中单篇文章失败 → 记录日志 → 跳过 → 继续下一篇。只有零文章或浏览器崩溃才标记任务失败。
 
-### 2.2 数据流（以下载作者全部文章为例）
+**请求间隔：**
+- 分页遍历：每页之间有 `asyncio.sleep(REQUEST_INTERVAL)` — 已实现
+- 页面导航重试：`asyncio.sleep(REQUEST_INTERVAL * attempt)` 退避 — 已实现
+- 批量下载逐篇之间：**当前缺失** `asyncio.sleep(REQUEST_INTERVAL)`，需在 `_run_blog` / `_run_collection` / `_run_favorites` 的循环中添加
 
-```mermaid
-sequenceDiagram
-    participant User as 用户浏览器
-    participant API as FastAPI
-    participant Task as 任务调度
-    participant Spider as 爬虫引擎
-    participant Files as 文件系统
-
-    User->>API: POST /api/download/blog {user_id: 123456}
-    API->>Task: 创建后台任务
-    API-->>User: {task_id: "uuid", status: "pending"}
-
-    Task->>Spider: resolve_blog_domain(123456) → "abc"
-    Spider-->>Task: blog = "abc.lofter.com"
-
-    loop page=1..N
-        Task->>Spider: get_post_links("abc", page)
-        Spider-->>Task: [url1, url2, ...]
-
-        loop each url
-            Task->>Spider: download_post(url)
-            Spider-->>Task: Post(title, content, images)
-            Task->>Files: saver.save(post)
-            Task-->>API: WebSocket 推送进度
-        end
-    end
-
-    Task-->>API: 任务完成
-    API-->>User: 结果统计
-```
-
-### 2.3 文件存储结构
+### 4.5 `downloader/parser.py` — 文章解析
 
 ```
-downloads/
-├── {author_name}/
-│   ├── {publish_date}_{post_title}/
-│   │   ├── index.md               ← Markdown 正文
-│   │   └── images/
-│   │       ├── 001.jpg
-│   │       ├── 002.png
-│   │       └── ...
-│   └── ...
-├── 收藏文章/
-│   └── ...
-└── 单篇下载/
-    └── ...
+extract_post(page, url) → dict | None
+├── Strategy 1: page.evaluate("window.__INITIAL_STATE__")
+│   └── _parse_initial_state(state, url) → dict | None
+├── Strategy 2: page.evaluate("document.getElementById('__NEXT_DATA__')?.textContent")
+│   └── _parse_next_data(data, url) → dict | None
+└── Strategy 3: _try_html(page.content(), url)
+    ├── 3a: _try_ldjson(soup, url) — JSON-LD 结构化数据
+    ├── 3b: _try_embedded_json(html, url) — 正则匹配 window.__INITIAL_STATE__ 和 __NEXT_DATA__
+    └── 3c: CSS 选择器降级 — .post_title, .author, .date 等
 ```
 
-### 2.4 Markdown 输出模板
+三种顶层策略按优先级依次降级。Strategy 3 内部含 3 个子策略。
 
-```markdown
-# 文章标题
+提取字段：`title`, `author`, `publish_date`, `content_html`, `content_markdown`, `image_urls`
 
-- **作者**: 作者名
-- **发布日期**: 2024-01-01
-- **原文链接**: https://xxx.lofter.com/post/xxx_xxx
-
----
-
-文章正文内容...
-
-![图片](images/001.jpg)
-```
-
----
-
-## 三、模块详细设计
-
-### 3.1 `config.py` — 配置管理
-
-基于 `pydantic-settings` 管理全部配置，支持 `.env` 文件和环境变量覆盖。
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `download_dir` | `Path` | `~/lofter_downloads` | 下载存储根目录 |
-| `request_interval` | `float` | `1.5` | 请求间隔（秒） |
-| `max_retries` | `int` | `3` | 最大重试次数 |
-| `request_timeout` | `int` | `30` | 请求超时（秒） |
-| `cookie` | `str` | `""` | 登录 Cookie（敏感信息） |
-| `db_path` | `Path` | `~/.lofter_downloader/data.db` | 数据库路径 |
-| `log_level` | `str` | `"INFO"` | 日志级别 |
-| `max_concurrency` | `int` | `3` | 最大并发请求数 |
-
-### 3.2 `core/spider.py` — 爬虫基类
-
-**职责：** 封装统一的 HTTP 请求、重试、限速、HTML 解析逻辑。
-
-- 继承 `ABC`，子类需实现 `run()` 方法
-- 使用 `asyncio.Semaphore` 控制并发
-- 自动重试（指数退避）
-- 统一的 User-Agent 和超时配置
-
-### 3.3 `core/post.py` — 单篇文章下载（F4）
-
-**职责：** 解析单篇 LOFTER 文章页面，提取标题、作者、日期、正文、图片。
-
-- 输入：文章完整 URL
-- 输出：`Post` 数据类对象
-
-### 3.4 `core/blog.py` — 作者全部文章（F3）
-
-**职责：** 根据用户数字 ID，解析博客域名，遍历全部分页获取所有文章。
-
-- 输入：用户数字 ID
-- 输出：`list[Post]`
-- 实现步骤：
-  1. `resolver.resolve_blog_domain(user_id)` → 域名
-  2. 获取博客总页数
-  3. 遍历 `page=1..N` 提取文章链接
-  4. 逐篇下载
-
-### 3.5 `core/collection.py` — 合集下载（F2）
-
-**职责：** 解析合集页面，获取合集内所有文章并下载。
-
-- 输入：合集 URL
-- 输出：`list[Post]`
-
-### 3.6 `core/favorites.py` — 收藏下载（F1）
-
-**职责：** 在已登录状态下，获取用户收藏页面的所有文章并下载。
-
-- 输入：无（依赖已保存的登录态）
-- 输出：`list[Post]`
-- 需要先通过 `auth.py` 验证登录状态
-
-### 3.7 `core/auth.py` — 登录模块
-
-**职责：** 管理 LOFTER 登录会话。
-
-- **Cookie 导入：** 用户从浏览器复制 Cookie → 加密存储到 SQLite
-- **会话验证：** 请求 `www.lofter.com` 检查登录态
-- **会话持久化：** 加密保存，下次启动自动加载
-- ~~模拟登录：~~ 作为降级方案，因网易通行证有验证码/滑块，不保证成功
-
-### 3.8 `core/resolver.py` — ID 解析模块
-
-**职责：** 实现用户数字 ID 与博客域名之间的双向解析。
-
-- 原理：请求 LOFTER 页面，解析 `<script>` 标签中的 `window.globalData`
-
-### 3.9 `core/task_manager.py` — 任务调度
-
-**职责：** 管理所有下载任务的创建、进度追踪、取消和历史查询。
-
-- `create_task(type, params)` → `task_id`
-- `get_progress(task_id)` → `Progress`
-- `cancel_task(task_id)`
-- `get_history()` → `list[Task]`
-- 通过 WebSocket 推送实时进度
-
-### 3.10 `storage/saver.py` — 存储模块
-
-**职责：** 将 `Post` 对象保存到文件系统。
-
-- 按作者/合集组织文件夹
-- 正文保存为 Markdown（`index.md`）
-- 图片异步下载到 `images/` 子目录
-
-### 3.11 `models/schemas.py` — 数据模型
-
-Pydantic 模型用于 API 请求/响应校验：
+### 4.6 `downloader/models.py` — 数据模型
 
 ```python
-class DownloadPostRequest(BaseModel):
-    url: HttpUrl
+@dataclass
+class Post:
+    url, title, author, publish_date, content_html, content_markdown, image_urls
 
-class DownloadBlogRequest(BaseModel):
-    user_id: int
+class TaskStatus(Enum): PENDING, RUNNING, COMPLETED, FAILED, CANCELED
 
-class DownloadCollectionRequest(BaseModel):
-    url: HttpUrl
+@dataclass
+class Task:
+    task_id, type, status, current, total, message, error, result, created_at
+    progress: float  # computed property
 
-class TaskResponse(BaseModel):
-    task_id: str
-    status: str
-    progress: float
-    created_at: datetime
-
-class LoginCookieRequest(BaseModel):
-    cookie: str
+class TaskManager:
+    _tasks: dict[str, Task]
+    _lock: threading.Lock              # 保护 _tasks 的并发访问
+    create(), get(), list_all(), update()
+    cleanup(max_items=100)             # 淘汰最旧的非运行中任务
+    cancel(task_id) → bool             # 设置 CANCELED 状态 + 触发 CancelledError
 ```
 
-### 3.12 `models/database.py` — 数据库
+**线程安全要求：** `create()`、`update()`、`get()`、`list_all()` 均需持有 `_lock`。`update()` 的 get + setattr 循环必须在锁内完成。
 
-SQLite + SQLAlchemy，存储任务历史记录和加密的登录会话。
+**任务取消机制（需重构）：**
+1. `submit_async()` 返回的 Future 对象保存在 Task 上（`task._future`）
+2. `cancel()` 同时执行：(a) `task_manager.update(status=CANCELED)` + (b) `task._future.cancel()`
+3. 后台协程在 `await` 点收到 `CancelledError` 后执行清理（关闭 BrowserContext、删除部分下载文件）
+4. 协程内部的取消标志检查作为补充（处理 `CancelledError` 被抑制的边缘情况）
 
-- `Task` 表：ID、类型、参数、状态、进度、结果统计、创建时间
-- `LoginSession` 表：ID、加密 Cookie、有效性标记、更新时间
+### 4.7 `downloader/saver.py` — 存储
 
----
+```
+PostSaver(base_dir, cookies=None)
+├── save_dict(post_dict, sub_dir) → Path
+│   ├── _make_post_dir(sub_dir, title) → Path
+│   ├── _save_markdown(path, post)       # 使用 MARKDOWN_TEMPLATE
+│   └── _save_images(images_dir, urls)   # 含重试 + 指数退避
+├── _infer_extension(url, content_type) → str
+└── close()                              # 关闭 httpx 客户端
+```
 
-## 四、API 接口设计
+**Cookie 转换：** Playwright storageState 的 cookies 格式为 `[{name, value, domain, path, ...}]`。`PostSaver.__init__()` 提取 `{name: value}` 键值对传给 httpx。当前实现丢弃 domain/path/sameSite 属性，对于 LOFTER CDN 的图片下载场景可正常工作，但跨域图片请求可能需完整 cookie 属性。
+
+**图片下载要求：**
+- 设置 `Referer` 请求头为 LOFTER 域名（反盗链）
+- 重试最多 2 次，含指数退避（1s → 2s）
+- 失败时记录警告日志，包含 URL 和 HTTP 状态码，不终止文章保存
+
+**文件名安全：** `_sanitize_filename()` 替换 `< > : " / \ | ? *` 为 `_`，去除首尾空格和点，截断到 200 字符。全特殊字符标题降级为 `untitled_{timestamp}`。
+
+### 4.8 `downloader/exceptions.py` — 异常
+
+```
+LofterError (base)           — 已在 browser.py 中使用
+├── LoginRequiredError       — 会话过期时抛出（pipeline.py）
+├── ParseError               — 所有提取策略失败时抛出（parser.py）
+├── NetworkError             — 页面导航/图片下载重试耗尽时抛出
+└── TaskCanceledError        — 任务被取消时抛出（用于协程内部传播）
+```
+
+**当前状态：** 仅 `LofterError` 在 browser.py 中被实际使用。其余 4 个异常已定义但未被 raise。需在 parser.py（ParseError）、pipeline.py（LoginRequiredError、NetworkError）、routes.py（TaskCanceledError）中接入。
+
+### 4.9 `web/routes.py` — API 路由
+
+Flask Blueprint。模块级变量维护登录状态（单用户模式）：
+- `_login_browser` / `_login_context` / `_login_page` — 登录中的 headed 浏览器资源
+- `_user_name` — 已登录用户名
+- `task_manager` — 全局 TaskManager 实例（线程安全）
+- `browser` — 由 `app.py` 注入的 BrowserManager
+- `_running_task_id` — 当前运行中的任务 ID（并发控制）
+
+**登录超时实现：** `login_start()` 中通过 `asyncio.get_event_loop().call_later(300, _close_login_browser)` 注册 5 分钟后自动关闭 headed 浏览器的回调。
+
+**会话过期检测：** `_save_results()` 在保存文章前验证 storageState 有效性（访问 LOFTER 首页检查是否被重定向到 `/front/login`）。若失效，标记任务 FAILED 并设置 error="登录会话已过期，请重新登录"。
+
+**并发控制：** 下载端点创建任务前检查 `_running_task_id`，若已有运行中任务则返回 `{ok: false, error: "已有下载任务在进行中"}`。
+
+**退出登录清理：** `logout()` 遍历所有任务，取消运行中的任务（调用 `task_manager.cancel()`），关闭 headed 浏览器（如存在），清除 `_login_*` 引用。
+
+### 4.10 `web/templates/index.html` — 前端
+
+Alpine.js 单页应用，2 秒轮询 `GET /api/tasks` 更新进度。
+
+**已实现特性：** 暗黑模式（系统跟随 + 手动切换）、登录状态显示（@username + 头像首字母）、任务进度条、错误信息展示、已完成任务独立区域。
+
+## 五、API 接口
 
 | 方法 | 路径 | 请求体 | 响应 | 说明 |
-|---|---|---|---|---|
-| `POST` | `/api/login/cookie` | `{cookie: str}` | `{ok: bool}` | 导入 Cookie |
-| `POST` | `/api/login/account` | `{username, password}` | `{ok: bool}` | 账号登录 |
-| `GET` | `/api/login/status` | — | `{logged_in: bool}` | 检查登录态 |
-| `DELETE` | `/api/login` | — | `{ok: bool}` | 清除登录信息 |
-| `POST` | `/api/download/post` | `{url: str}` | `{task_id}` | 下载单篇 |
-| `POST` | `/api/download/blog` | `{user_id: int}` | `{task_id}` | 下载全部 |
-| `POST` | `/api/download/collection` | `{url: str}` | `{task_id}` | 下载合集 |
-| `POST` | `/api/download/favorites` | `{}` | `{task_id}` | 下载收藏 |
-| `GET` | `/api/tasks/{task_id}` | — | `TaskResponse` | 查询任务 |
-| `POST` | `/api/tasks/{task_id}/cancel` | — | `{ok: bool}` | 取消任务 |
-| `GET` | `/api/tasks` | — | `list[TaskResponse]` | 历史列表 |
-| `WS` | `/api/ws/{task_id}` | — | 实时进度帧 | WebSocket 推送 |
-| `GET` | `/api/stats` | — | `{total, success, failed}` | 下载统计 |
+|------|------|--------|------|------|
+| GET | `/` | — | HTML | 前端页面 |
+| GET | `/api/login/status` | — | `{logged_in, user_name}` | 登录状态 |
+| POST | `/api/login/start` | — | `{ok, status, message}` | 启动浏览器登录 |
+| POST | `/api/login/check` | — | `{ok, logged_in, user_name}` | 检查登录结果 |
+| DELETE | `/api/login` | — | `{ok}` | 清除登录（含取消运行中任务） |
+| POST | `/api/download/post` | `{url}` | `{task_id}` 或 `{ok:false, error}` | 下载单篇 |
+| POST | `/api/download/blog` | `{user_id}` | `{task_id}` 或 `{ok:false, error}` | 下载作者全部 |
+| POST | `/api/download/collection` | `{url}` | `{task_id}` 或 `{ok:false, error}` | 下载合集 |
+| POST | `/api/download/favorites` | — | `{task_id}` 或 `{ok:false, error}` | 下载收藏 |
+| GET | `/api/tasks` | — | `[{task}]` | 任务列表 |
+| GET | `/api/tasks/<id>` | — | `{task}` 或 404 | 单个任务 |
+| POST | `/api/tasks/<id>/cancel` | — | `{ok}` | 取消任务（真正中断协程） |
 
----
-
-## 五、测试架构
-
-### 5.1 测试金字塔
-
-```
-         ╱╲
-        ╱  ╲          E2E 测试（少量）
-       ╱    ╲
-      ╱──────╲
-     ╱        ╲      集成测试（适中）
-    ╱          ╲
-   ╱────────────╲
-  ╱              ╲   单元测试（大量）
- ╱────────────────╲
+`{task}` 格式：
+```json
+{
+  "task_id": "abc12345",
+  "type": "blog",
+  "status": "running",
+  "progress": 0.35,
+  "current": 7,
+  "total": 20,
+  "message": "文章标题",
+  "error": "",
+  "created_at": "2026-05-24T12:00:00+00:00"
+}
 ```
 
-### 5.2 测试策略
-
-| 层次 | 工具 | 测试对象 | 覆盖率目标 |
-|---|---|---|---|
-| 单元测试 | pytest + pytest-mock | 每个函数/类的独立逻辑 | > 90% |
-| 集成测试 | pytest + httpx (mock) | 模块间协作、API 端点 | > 80% |
-| E2E 测试 | pytest + 真实网络（标记） | 完整下载流水线 | 关键路径 |
-
-### 5.3 测试文件
+## 六、数据流
 
 ```
-tests/
-├── conftest.py                    # 全局 fixtures
-│   ├── mock_http_client()         # 使用 respx 拦截 HTTP
-│   ├── temp_download_dir()        # tmp_path 临时目录
-│   └── sample_post_html()         # 从 fixtures/ 加载样本
-│
-├── unit/
-│   ├── test_spider.py             # 请求/重试/限速
-│   ├── test_post.py               # 文章解析
-│   ├── test_blog.py               # 翻页和 ID 解析
-│   ├── test_collection.py         # 合集解析
-│   ├── test_resolver.py           # ID 映射
-│   ├── test_auth.py               # Cookie 管理
-│   └── test_saver.py              # 文件存储
-│
-├── integration/
-│   ├── test_download_flow.py      # 完整下载流程
-│   └── test_api_endpoints.py      # FastAPI TestClient
-│
-├── e2e/
-│   └── test_full_pipeline.py      # 真实网络（@pytest.mark.e2e）
-│
-└── fixtures/
-    ├── post_page.html
-    ├── blog_page.html
-    └── collection_page.html
+用户点击「下载全部」
+  → POST /api/download/blog {user_id: "12345678"}
+  → routes.download_blog()
+      1. 检查 _running_task_id（并发控制）
+      2. 创建 task，submit_async(_run_blog)，保存 future 到 task._future
+      3. 设置 _running_task_id
+  → _run_blog 协程在浏览器线程执行：
+      1. 验证 storageState 有效性（会话过期检测）
+      2. 创建 BrowserContext（加载 storageState）
+      3. 解析 user_id → 博客域名（访问 lofter.com/blog/{id}）
+      4. 分页收集文章链接（每页间隔 REQUEST_INTERVAL 秒）
+      5. 逐篇下载（每篇间隔 REQUEST_INTERVAL 秒）：
+         goto(文章URL) → 等待 SPA 渲染 → parser.extract_post() → saver.save_dict()
+      6. 每篇更新 task_manager（current++, message=标题）
+      7. 响应 CancelledError → 清理资源 → 更新状态
+  → 前端每 2s 轮询 GET /api/tasks 更新进度条
 ```
 
----
+## 七、配置项
 
-## 六、文档体系
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LOFTER_DOWNLOAD_DIR` | `~/lofter_downloads` | 下载根目录 |
+| `LOFTER_SESSION_PATH` | `~/.lofter_downloader/lofter_auth.json` | 登录会话文件 |
+| `LOFTER_REQUEST_INTERVAL` | `2.0` | 请求间隔（秒） |
+| `LOFTER_MAX_RETRIES` | `2` | 最大重试次数 |
+| `LOFTER_REQUEST_TIMEOUT` | `30` | 请求超时（秒） |
+| `LOFTER_LOG_LEVEL` | `INFO` | 日志级别 |
+| `LOFTER_HOST` | `127.0.0.1` | 监听地址 |
+| `LOFTER_PORT` | `8080` | 监听端口 |
 
-### 6.1 MkDocs 配置
+**配置容错：** 数值类型配置使用 `try/except ValueError` 解析，非法值时回退默认值并记录警告。
 
-```yaml
-site_name: LOFTER 下载器
-theme:
-  name: material
-  palette:
-    - scheme: default
-      primary: indigo
-      toggle:
-        icon: material/weather-night
-        scheme: slate
-  features:
-    - navigation.tabs
-    - content.code.copy
-plugins:
-  - search
-  - mkdocstrings:
-      handlers:
-        python:
-          paths: [src]
-          options:
-            docstring_style: numpy
-            show_source: true
-```
-
-### 6.2 文档结构
+## 八、依赖
 
 ```
-docs/
-├── index.md             # 项目介绍 + 截图
-├── quickstart.md        # 快速开始
-├── login.md             # Cookie 导入说明
-├── faq.md               # 常见问题
-├── api/                 # 自动生成
-│   ├── core.md
-│   ├── storage.md
-│   └── web.md
-├── developer.md         # 开发者指南
-├── architecture.md      # 架构图
-└── changelog.md         # 变更日志
+flask>=3.0           # Web 框架
+playwright>=1.45     # 浏览器自动化
+beautifulsoup4>=4.12 # HTML 解析
+lxml>=5.0            # BS4 后端
+httpx>=0.27          # 图片下载
+aiofiles>=23.2       # 异步文件写入
+markdownify>=0.12    # HTML → Markdown
 ```
 
----
+开发依赖：`pytest>=8.0`, `pytest-cov>=5.0`, `ruff>=0.8`
 
-## 七、CI/CD 流水线
-
-### 7.1 CI 流水线
-
-每次 push / PR 触发：
-
-1. 检出代码
-2. 配置 Python（3.10 / 3.11 / 3.12 矩阵）
-3. 安装依赖 `pip install -e ".[dev,docs]"`
-4. Ruff 代码检查
-5. mypy 类型检查
-6. pytest 测试 + 覆盖率
-7. 上传覆盖率报告至 Codecov
-8. MkDocs 构建文档（strict 模式）
-
-### 7.2 CD 流水线
-
-推送 `v*` tag 触发：
-
-1. 构建 Python 包（`python -m build`）
-2. 发布至 PyPI（可信发布）
-3. 构建 Docker 镜像
-
----
-
-## 八、实施路线图
-
-| 阶段 | 内容 | 核心文件数 |
-|---|---|---|
-| **P0** 项目骨架 | pyproject.toml、配置、日志、异常、入口 | 8 |
-| **P1** 爬虫引擎 | 爬虫基类、单篇下载、存储模块、ID 解析 | 5 |
-| **P2** 批量下载 | 作者全部文章、合集、收藏 + 任务调度 | 5 |
-| **P3** Web 服务 | FastAPI 应用、路由、数据库 | 6 |
-| **P4** 前端 UI | HTML 模板、Alpine.js 交互、Tailwind 样式 | 4 |
-| **P5** 测试 | 单元/集成/E2E 测试 + fixtures | 15+ |
-| **P6** 文档 + CI/CD | MkDocs、ci.yml、cd.yml、changelog | 6 |
-| **P7** 打磨 | Dockerfile、暗黑模式、动效 | 3 |
-
----
-
-## 九、风险与应对
-
-| 风险 | 应对方案 |
-|---|---|
-| LOFTER 页面结构变更 | 爬虫基类集中解析逻辑，CSS 选择器配置化 |
-| 反爬机制（限流/封 IP） | 请求间隔 + 随机 UA + 重试 + 用户可调参数 |
-| 模拟登录困难 | 优先 Cookie 导入，模拟登录作为降级 |
-| 数字 ID 解析不稳定 | 备用方案：用户手动输入博客域名 |
-
----
-
-## 十、编码规范
-
-- **代码风格：** Black（行宽 88）、Ruff 检查
-- **类型注解：** mypy strict 模式
-- **文档字符串：** NumPy 风格
-- **日志：** 使用 `logging` 模块，禁止 `print`
-- **异常：** 自定义异常层次，边界统一处理
-- **并发：** IO 密集型用 asyncio，CPU 密集型用多进程
-- **敏感信息：** 环境变量 / .env 文件，禁止硬编码
+**版本策略：** 使用 `>=` 下限约束（非 `==` 精确锁定），在 `pyproject.toml` 中声明依赖以支持 lock 文件生成。
