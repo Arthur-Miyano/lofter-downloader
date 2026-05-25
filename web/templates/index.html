@@ -102,22 +102,12 @@
                     </button>
                 </div>
 
-                <div class="flex items-center gap-3">
-                    <span class="text-gray-700 w-24 shrink-0">合集链接</span>
-                    <input type="url" x-model="collectionUrl" placeholder="粘贴合集页面链接"
-                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                    <button @click="downloadCollection()" :disabled="!collectionUrl || loading"
-                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
-                        下载合集
-                    </button>
-                </div>
-
                 <div class="flex items-center gap-3 pt-2 border-t border-gray-100">
-                    <span class="text-gray-700 w-24 shrink-0">收藏文章 🔒</span>
+                    <span class="text-gray-700 w-24 shrink-0">喜欢文章 ❤️</span>
                     <span x-show="!loggedIn" class="text-sm text-amber-600">需先登录</span>
-                    <button @click="downloadFavorites()" :disabled="loading || !loggedIn"
+                    <button @click="downloadLikes()" :disabled="loading || !loggedIn"
                         class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium ml-auto">
-                        下载收藏
+                        下载喜欢
                     </button>
                 </div>
             </div>
@@ -182,7 +172,6 @@
             return {
                 singleUrl: '',
                 userId: '',
-                collectionUrl: '',
                 loginMessage: '',
                 loggedIn: false,
                 userName: '',
@@ -281,15 +270,9 @@
                     await this._send('/api/download/blog', { user_id: this.userId });
                 },
 
-                async downloadCollection() {
-                    if (!this.collectionUrl) return;
-                    const u = this.collectionUrl; this.collectionUrl = '';
-                    await this._send('/api/download/collection', { url: u });
-                },
-
-                async downloadFavorites() {
+                async downloadLikes() {
                     if (!this.loggedIn) return;
-                    await this._send('/api/download/favorites', {});
+                    await this._send('/api/download/likes', {});
                 },
 
                 async _send(url, body) {
@@ -322,7 +305,7 @@
                 },
 
                 typeLabel(t) {
-                    return { post: '单篇', blog: '作者全部', collection: '合集', favorites: '收藏' }[t] || t;
+                    return { post: '单篇', blog: '作者全部', likes: '喜欢' }[t] || t;
                 },
 
                 statusClass(s) {

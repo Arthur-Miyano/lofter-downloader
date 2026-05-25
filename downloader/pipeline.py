@@ -1,13 +1,11 @@
 """统一下载管道。
 
-DownloadPipeline 提供链接收集、单篇下载两大功能。
+DownloadPipeline 提供链接收集、单篇下载三大功能。
 
 链接收集策略（经实际验证）：
   博客全部文章 — DWR ArchiveBean.getArchivePostByTime（主）
                  备选 ?page=N SSR（仅旧模板有效）
-  合集 — SPA 页面：等待渲染 + 滚动加载 + DOM 提取
-  收藏 — DWR BlogBean.queryLikePosts（主）
-         备选收藏页 SPA 提取
+  喜欢 — DWR BlogBean.queryLikePosts
 
 window.__INITIAL_STATE__ 在实际 LOFTER 页面中不存在，不可用。
 """
@@ -31,16 +29,8 @@ from downloader.parser import extract_post
 
 logger = logging.getLogger(__name__)
 
-# 收藏页候选 URL
-FAVORITE_URLS = [
-    "https://www.lofter.com/fav/blog",
-    "https://www.lofter.com/user/fav/blog",
-    "https://www.lofter.com/my/fav",
-    "https://www.lofter.com/like",
-]
-
 # DWR API 端点
-DWR_FAV_URL = (
+DWR_LIKES_URL = (
     "https://www.lofter.com/dwr/call/plaincall/BlogBean.queryLikePosts.dwr"
 )
 
@@ -99,20 +89,15 @@ class DownloadPipeline:
         links = await self._paginate(blog_url)
         return links, domain
 
-    async def collect_collection_links(self, url: str) -> list[str]:
-        """收集合集全部文章链接（SPA 页面）。"""
-        return await self._paginate(url, use_spa=True)
+    async def collect_likes_links(self) -> list[str]:
+        """收集喜欢全部文章链接。
 
-    async def collect_favorites_links(self) -> list[str]:
-        """收集收藏全部文章链接。
-
-        优先 DWR API（已验证有效），URL 探测失败则降级为 SPA。
+        通过 DWR BlogBean.queryLikePosts API 分页获取。
         """
         storage = str(SESSION_PATH) if SESSION_PATH.exists() else None
         context = await self._browser.new_context(storage_state=storage)
         try:
             page = await context.new_page()
-            # 先获取用户 ID
             await _navigate(page, "https://www.lofter.com/")
             if "/front/login" in page.url:
                 raise LoginRequiredError("登录会话已过期，请重新登录")
@@ -123,21 +108,18 @@ class DownloadPipeline:
                 return '';
             }""")
 
-            if user_id:
-                logger.info("通过 DWR API 获取收藏，userId=%s", user_id)
-                links = await self._call_dwr_favorites(page, user_id)
-                if links:
-                    return links
+            if not user_id:
+                raise LoginRequiredError(
+                    "无法获取用户 ID，请确认已登录"
+                )
 
-            # 备选：SPA 收藏页
-            logger.info("DWR 收藏失败，尝试收藏页 SPA 提取")
-            fav_url = await self._resolve_favorites_url(context)
-            if fav_url:
-                return await self._paginate(fav_url, use_spa=True)
-
-            raise LoginRequiredError(
-                "无法获取收藏列表，请确认已登录并有收藏内容"
-            )
+            logger.info("通过 DWR API 获取喜欢，userId=%s", user_id)
+            links = await self._call_dwr_likes(page, user_id)
+            if not links:
+                raise LoginRequiredError(
+                    "未找到任何喜欢文章，请确认已登录并有喜欢内容"
+                )
+            return links
         finally:
             await context.close()
 
@@ -299,13 +281,13 @@ class DownloadPipeline:
         return all_links
 
     # ------------------------------------------------------------------
-    # DWR: 收藏
+    # DWR: 喜欢
     # ------------------------------------------------------------------
 
-    async def _call_dwr_favorites(
+    async def _call_dwr_likes(
         self, page: Any, user_id: str, batch_size: int = 100,
     ) -> list[str]:
-        """调用 DWR API 分页获取全部收藏文章链接。"""
+        """调用 DWR API 分页获取全部喜欢文章链接。"""
         all_links: list[str] = []
         got_num = 0
 
@@ -317,7 +299,7 @@ class DownloadPipeline:
             )
             raw = await page.evaluate(
                 f"""async () => {{
-                    const r = await fetch('{DWR_FAV_URL}', {{
+                    const r = await fetch('{DWR_LIKES_URL}', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'text/plain'}},
                         body: {_json.dumps(body)},
@@ -337,33 +319,13 @@ class DownloadPipeline:
             all_links.extend(new_links)
             got_num += batch_size
             logger.debug(
-                "DWR 收藏 [offset=%d]: +%d 篇 (累计 %d)",
+                "DWR 喜欢 [offset=%d]: +%d 篇 (累计 %d)",
                 got_num, len(new_links), len(all_links),
             )
             await asyncio.sleep(REQUEST_INTERVAL)
 
-        logger.info("DWR 收藏完成，共 %d 篇", len(all_links))
+        logger.info("DWR 喜欢完成，共 %d 篇", len(all_links))
         return all_links
-
-    # ------------------------------------------------------------------
-    # 收藏 URL 探测
-    # ------------------------------------------------------------------
-
-    async def _resolve_favorites_url(self, context: Any) -> str | None:
-        """探测可用的收藏页 URL。"""
-        for url in FAVORITE_URLS:
-            try:
-                page = await context.new_page()
-                await _navigate(page, url)
-                links = await _extract_links_spa(page, url)
-                await page.close()
-                if links:
-                    logger.info("收藏页 URL 可用: %s (links=%d)", url, len(links))
-                    return url
-            except Exception as exc:
-                logger.debug("收藏 URL %s 失败: %s", url, exc)
-        logger.warning("所有收藏页 URL 均探测失败")
-        return None
 
     # ------------------------------------------------------------------
     # 分页遍历（SSR + SPA）

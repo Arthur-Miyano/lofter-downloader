@@ -230,24 +230,13 @@ def download_blog():
     return _create_download_task("blog", _run_blog, str(user_id))
 
 
-@api.route("/download/collection", methods=["POST"])
-def download_collection():
-    """下载合集。"""
-    data = request.get_json(silent=True) or {}
-    url = data.get("url", "")
-    if not url:
-        return jsonify(ok=False, error="请输入合集页面链接"), 400
-
-    return _create_download_task("collection", _run_collection, url)
-
-
-@api.route("/download/favorites", methods=["POST"])
-def download_favorites():
-    """下载收藏文章（需要登录）。"""
+@api.route("/download/likes", methods=["POST"])
+def download_likes():
+    """下载喜欢文章（需要登录）。"""
     if not SESSION_PATH.exists():
-        return jsonify(ok=False, error="收藏下载需要先登录，请先完成登录"), 403
+        return jsonify(ok=False, error="喜欢下载需要先登录，请先完成登录"), 403
 
-    return _create_download_task("favorites", _run_favorites)
+    return _create_download_task("likes", _run_likes)
 
 
 def _create_download_task(task_type: str, coro_func, *args) -> tuple:
@@ -415,64 +404,19 @@ async def _run_blog(task_id: str, user_id: str) -> None:
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
 
 
-async def _run_collection(task_id: str, url: str) -> None:
-    """后台执行合集下载。"""
+async def _run_likes(task_id: str) -> None:
+    """后台执行喜欢文章下载。"""
     from downloader.pipeline import DownloadPipeline
 
     task_manager.update(task_id, status=TaskStatus.RUNNING)
     pipeline = DownloadPipeline(browser)
     try:
-        links = await pipeline.collect_collection_links(url)
-        if not links:
-            task_manager.update(
-                task_id, status=TaskStatus.FAILED,
-                error="未找到任何文章，请检查合集链接是否正确",
-            )
-            return
-
-        task_manager.update(task_id, total=len(links))
-        for idx, link in enumerate(links):
-            _check_cancelled(task_id)
-            try:
-                results = await pipeline.run_post(link)
-                if results:
-                    await _save_results(results, sub_dir="合集")
-                task_manager.update(
-                    task_id,
-                    current=idx + 1,
-                    message=results[0].get("title", "") if results else link,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("跳过失败文章 %s: %s", link, exc)
-                task_manager.update(
-                    task_id, current=idx + 1, message=f"跳过: {link[:50]}"
-                )
-            from config import REQUEST_INTERVAL
-            await asyncio.sleep(REQUEST_INTERVAL)
-
-        task_manager.update(task_id, status=TaskStatus.COMPLETED)
-    except asyncio.CancelledError:
-        task_manager.update(task_id, status=TaskStatus.CANCELED)
-    except Exception as exc:
-        logger.exception("下载合集失败")
-        task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
-
-
-async def _run_favorites(task_id: str) -> None:
-    """后台执行收藏下载。"""
-    from downloader.pipeline import DownloadPipeline
-
-    task_manager.update(task_id, status=TaskStatus.RUNNING)
-    pipeline = DownloadPipeline(browser)
-    try:
-        links = await pipeline.collect_favorites_links()
+        links = await pipeline.collect_likes_links()
         if not links:
             task_manager.update(
                 task_id,
                 status=TaskStatus.FAILED,
-                error="未找到任何收藏文章，请确认已登录并有收藏内容",
+                error="未找到任何喜欢文章，请确认已登录并有喜欢内容",
             )
             return
 
@@ -482,7 +426,7 @@ async def _run_favorites(task_id: str) -> None:
             try:
                 results = await pipeline.run_post(link)
                 if results:
-                    await _save_results(results, sub_dir="收藏文章")
+                    await _save_results(results, sub_dir="喜欢文章")
                 task_manager.update(
                     task_id,
                     current=idx + 1,
@@ -502,7 +446,7 @@ async def _run_favorites(task_id: str) -> None:
     except asyncio.CancelledError:
         task_manager.update(task_id, status=TaskStatus.CANCELED)
     except Exception as exc:
-        logger.exception("下载收藏失败")
+        logger.exception("下载喜欢失败")
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
 
 

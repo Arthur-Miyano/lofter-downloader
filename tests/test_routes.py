@@ -109,10 +109,10 @@ class TestDownloads:
         data = json.loads(resp.data)
         assert "task_id" in data
 
-    def test_download_favorites_without_session(self, client) -> None:  # noqa: ANN001
+    def test_download_likes_without_session(self, client) -> None:  # noqa: ANN001
         with patch("web.routes.SESSION_PATH") as mock_path:
             mock_path.exists.return_value = False
-            resp = client.post("/api/download/favorites")
+            resp = client.post("/api/download/likes")
             assert resp.status_code == 403
 
 
@@ -165,15 +165,14 @@ class TestTasks:
         assert data["ok"] is False
 
     def test_download_various_types(self, client) -> None:  # noqa: ANN001
-        """验证四种下载类型均可创建任务。"""
+        """验证三种下载类型均可创建任务。"""
         import web.routes as routes
 
-        # 合集
-        resp = client.post(
-            "/api/download/collection",
-            json={"url": "https://test.lofter.com/collection/123"},
-        )
-        assert json.loads(resp.data)["task_id"]
+        # 喜欢（需模拟已登录）
+        with patch("web.routes.SESSION_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            resp = client.post("/api/download/likes")
+            assert json.loads(resp.data)["task_id"]
 
         # 重置并发控制，模拟第一个任务已完成
         routes._running_task_id = None  # noqa: SLF001
@@ -196,11 +195,11 @@ class TestTasks:
         data = json.loads(resp.data)
         assert data["ok"] is False
 
-    def test_download_favorites_requires_login(self, client) -> None:  # noqa: ANN001
-        """收藏下载需要登录。"""
+    def test_download_likes_requires_login(self, client) -> None:  # noqa: ANN001
+        """喜欢下载需要登录。"""
         with patch("web.routes.SESSION_PATH") as mock_path:
             mock_path.exists.return_value = False
-            resp = client.post("/api/download/favorites")
+            resp = client.post("/api/download/likes")
             assert resp.status_code == 403
             data = json.loads(resp.data)
             assert "登录" in data["error"]

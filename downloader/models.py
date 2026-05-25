@@ -55,7 +55,7 @@ class Task:
     """下载任务追踪。"""
 
     task_id: str
-    type: str  # "post" | "blog" | "collection" | "favorites"
+    type: str  # "post" | "blog" | "likes"
     status: TaskStatus = TaskStatus.PENDING
     current: int = 0
     total: int = 0
