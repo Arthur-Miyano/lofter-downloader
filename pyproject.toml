@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lofter-downloader"
 version = "1.0.0"
-description = "网易 LOFTER 文章下载器"
+description = "网易 LOFTER 文章下载器 — 支持 Markdown / TXT / PDF 导出"
 readme = "README.md"
 authors = [{name = "developer"}]
 license = {text = "MIT"}
@@ -28,6 +28,7 @@ dependencies = [
     "httpx==0.28.1",
     "aiofiles==25.1.0",
     "markdownify==1.2.2",
+    "fpdf2==2.8.2",
 ]
 
 [project.optional-dependencies]
