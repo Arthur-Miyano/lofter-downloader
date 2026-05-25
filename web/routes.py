@@ -69,7 +69,12 @@ def login_start():
         return jsonify(ok=False, error="浏览器未初始化，请稍后重试"), 500
 
     if _login_in_progress:
-        return jsonify(ok=False, error="登录流程已在进行中，请完成当前登录"), 409
+        # 如果 headed 浏览器已经不在了，重置标志位
+        if _login_browser is None or not _login_browser.is_connected():
+            logger.warning("headed 浏览器已关闭，重置 _login_in_progress")
+            _login_in_progress = False
+        else:
+            return jsonify(ok=False, error="登录流程已在进行中，请完成当前登录"), 409
 
     _login_in_progress = True
 
@@ -153,10 +158,11 @@ def logout():
     _user_name = ""
     _login_in_progress = False
 
-    # 取消所有运行中的任务
+    # 取消所有运行中的任务并清理历史
     for task in task_manager.list_all():
         if task.status == TaskStatus.RUNNING:
             task_manager.cancel(task.task_id)
+    task_manager.clear_finished()
 
     # 异步清理 headed 浏览器（通过 browser 线程）
     if _login_browser is not None:
@@ -368,7 +374,7 @@ async def _run_blog(task_id: str, user_id: str) -> None:
     task_manager.update(task_id, status=TaskStatus.RUNNING)
     pipeline = DownloadPipeline(browser)
     try:
-        links = await pipeline.collect_blog_links(user_id)
+        links, blog_name = await pipeline.collect_blog_links(user_id)
         if not links:
             task_manager.update(
                 task_id, status=TaskStatus.FAILED,
@@ -376,7 +382,9 @@ async def _run_blog(task_id: str, user_id: str) -> None:
             )
             return
 
-        task_manager.update(task_id, total=len(links))
+        task_manager.update(
+            task_id, total=len(links), message=f"作者: {blog_name}",
+        )
         for idx, link in enumerate(links):
             _check_cancelled(task_id)
             try:

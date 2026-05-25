@@ -153,12 +153,11 @@ class TaskManager:
                 task._future = future
 
     def cleanup(self) -> int:
-        """清理旧任务，仅保留最近 MAX_TASK_HISTORY 条非运行中任务。
+        """裁剪旧任务至 MAX_TASK_HISTORY 条（保留运行中的任务）。
 
-        返回清理的任务数。
+        返回裁剪的任务数。
         """
         with self._lock:
-            # 分离运行中和已完成的任务
             running = {
                 tid: t
                 for tid, t in self._tasks.items()
@@ -169,7 +168,6 @@ class TaskManager:
                 for tid, t in self._tasks.items()
                 if t.status not in (TaskStatus.PENDING, TaskStatus.RUNNING)
             }
-            # 保留最近的 MAX_TASK_HISTORY 条
             kept = dict(
                 sorted(
                     finished.items(),
@@ -180,5 +178,22 @@ class TaskManager:
             removed = len(finished) - len(kept)
             self._tasks = {**running, **kept}
         if removed > 0:
-            logger.info("清理了 %d 条旧任务记录", removed)
+            logger.info("裁剪了 %d 条旧任务记录", removed)
+        return removed
+
+    def clear_finished(self) -> int:
+        """清除所有已完成/失败/取消的任务（登出时调用）。
+
+        返回清除的任务数。
+        """
+        with self._lock:
+            running = {
+                tid: t
+                for tid, t in self._tasks.items()
+                if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+            }
+            removed = len(self._tasks) - len(running)
+            self._tasks = running
+        if removed > 0:
+            logger.info("登出清理了 %d 条任务记录", removed)
         return removed
