@@ -215,8 +215,10 @@ def download_post():
     url = data.get("url", "")
     if not url:
         return jsonify(ok=False, error="请输入文章链接"), 400
+    fmt = data.get("format", "md")
+    dl_dir = data.get("download_dir", "")
 
-    return _create_download_task("post", _run_post, url)
+    return _create_download_task("post", _run_post, url, fmt, dl_dir)
 
 
 @api.route("/download/blog", methods=["POST"])
@@ -226,8 +228,10 @@ def download_blog():
     user_id = data.get("user_id", "")
     if not user_id:
         return jsonify(ok=False, error="请输入作者数字 ID"), 400
+    fmt = data.get("format", "md")
+    dl_dir = data.get("download_dir", "")
 
-    return _create_download_task("blog", _run_blog, str(user_id))
+    return _create_download_task("blog", _run_blog, str(user_id), fmt, dl_dir)
 
 
 @api.route("/download/likes", methods=["POST"])
@@ -235,8 +239,11 @@ def download_likes():
     """下载喜欢文章（需要登录）。"""
     if not SESSION_PATH.exists():
         return jsonify(ok=False, error="喜欢下载需要先登录，请先完成登录"), 403
+    data = request.get_json(silent=True) or {}
+    fmt = data.get("format", "md")
+    dl_dir = data.get("download_dir", "")
 
-    return _create_download_task("likes", _run_likes)
+    return _create_download_task("likes", _run_likes, fmt, dl_dir)
 
 
 def _create_download_task(task_type: str, coro_func, *args) -> tuple:
@@ -327,7 +334,8 @@ def cancel_task(task_id: str):
 # ------------------------------------------------------------------
 
 
-async def _run_post(task_id: str, url: str) -> None:
+async def _run_post(task_id: str, url: str, fmt: str = "md",
+                    dl_dir: str = "") -> None:
     """后台执行单篇文章下载。"""
     from downloader.pipeline import DownloadPipeline
 
@@ -336,7 +344,8 @@ async def _run_post(task_id: str, url: str) -> None:
     try:
         results = await pipeline.run_post(url)
         if results:
-            await _save_results(results, sub_dir="单篇下载")
+            await _save_results(results, sub_dir="单篇下载", fmt=fmt,
+                                dl_dir=dl_dir)
             task_manager.update(
                 task_id,
                 status=TaskStatus.COMPLETED,
@@ -356,7 +365,8 @@ async def _run_post(task_id: str, url: str) -> None:
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
 
 
-async def _run_blog(task_id: str, user_id: str) -> None:
+async def _run_blog(task_id: str, user_id: str, fmt: str = "md",
+                   dl_dir: str = "") -> None:
     """后台执行作者全部文章下载。"""
     from downloader.pipeline import DownloadPipeline
 
@@ -379,7 +389,8 @@ async def _run_blog(task_id: str, user_id: str) -> None:
             try:
                 results = await pipeline.run_post(link)
                 if results:
-                    await _save_results(results, sub_dir=user_id)
+                    await _save_results(results, sub_dir=user_id, fmt=fmt,
+                                        dl_dir=dl_dir)
                 task_manager.update(
                     task_id,
                     current=idx + 1,
@@ -404,7 +415,8 @@ async def _run_blog(task_id: str, user_id: str) -> None:
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
 
 
-async def _run_likes(task_id: str) -> None:
+async def _run_likes(task_id: str, fmt: str = "md",
+                    dl_dir: str = "") -> None:
     """后台执行喜欢文章下载。"""
     from downloader.pipeline import DownloadPipeline
 
@@ -426,7 +438,8 @@ async def _run_likes(task_id: str) -> None:
             try:
                 results = await pipeline.run_post(link)
                 if results:
-                    await _save_results(results, sub_dir="喜欢文章")
+                    await _save_results(results, sub_dir="喜欢文章", fmt=fmt,
+                                        dl_dir=dl_dir)
                 task_manager.update(
                     task_id,
                     current=idx + 1,
@@ -450,19 +463,25 @@ async def _run_likes(task_id: str) -> None:
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
 
 
-async def _save_results(post_dicts: list[dict], sub_dir: str) -> None:
-    """保存文章到文件系统。"""
+async def _save_results(
+    post_dicts: list[dict], sub_dir: str, fmt: str = "md",
+    dl_dir: str = "",
+) -> None:
+    """保存文章到文件系统。dl_dir 为空则使用默认下载目录。"""
+    from pathlib import Path
+
     from downloader.saver import PostSaver
 
+    base_dir = Path(dl_dir).resolve() if dl_dir else DOWNLOAD_DIR
     storage = load_storage_state()
     cookies = []
     if storage and "cookies" in storage:
         cookies = storage["cookies"]
 
-    saver = PostSaver(DOWNLOAD_DIR, cookies=cookies)
+    saver = PostSaver(base_dir, cookies=cookies)
     try:
         for post_dict in post_dicts:
-            await saver.save_dict(post_dict, sub_dir=sub_dir)
+            await saver.save_dict(post_dict, sub_dir=sub_dir, fmt=fmt)
     finally:
         await saver.close()
 

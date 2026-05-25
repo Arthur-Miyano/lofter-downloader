@@ -7,30 +7,16 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
-            darkMode: 'class',
             theme: { extend: { colors: { primary: {50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a'} } } }
         }
     </script>
-    <style>
-        .dark { background-color: #1a1a2e; color: #e0e0e0; }
-        .dark .bg-white { background-color: #16213e; }
-        .dark .text-gray-700 { color: #c0c0c0; }
-        .dark .text-gray-500 { color: #9ca3af; }
-        .dark .border-gray-200 { border-color: #2a2a4a; }
-        .dark .hover\:bg-gray-50:hover { background-color: #1a1a3e; }
-    </style>
 </head>
 <body class="bg-gray-100 min-h-screen" x-data="app()">
     <div class="max-w-4xl mx-auto px-4 py-8">
         <!-- 头部 -->
-        <header class="flex items-center justify-between mb-8">
-            <div>
-                <h1 class="text-3xl font-bold text-primary-700">LOFTER 文章下载器</h1>
-                <p class="text-gray-500 mt-1">下载网易 LOFTER 文章，保存为 Markdown 格式</p>
-            </div>
-            <button @click="toggleDark()" class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition">
-                <span x-text="isDark ? '☀️' : '🌙'" class="text-xl"></span>
-            </button>
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-primary-700">LOFTER 文章下载器</h1>
+            <p class="text-gray-500 mt-1">下载网易 LOFTER 文章，支持 Markdown / TXT / PDF 格式</p>
         </header>
 
         <!-- LOFTER 全站登录提示 -->
@@ -72,6 +58,46 @@
                     class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium text-sm">
                     清除登录
                 </button>
+            </div>
+        </section>
+
+        <!-- 下载设置 -->
+        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4">⚙️ 下载设置</h2>
+            <div class="space-y-3">
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700 w-24 shrink-0 text-sm">保存目录</span>
+                    <div class="flex-1 flex gap-2">
+                        <input type="text" x-model="downloadDir" :placeholder="'默认: ' + defaultDir"
+                            class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm">
+                        <button @click="pickFolder()"
+                            class="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm whitespace-nowrap border border-gray-300">
+                            📁 浏览
+                        </button>
+                    </div>
+                    <input type="file" id="folderPicker" webkitdirectory directory x-ref="folderInput"
+                        @change="onFolderSelected()" class="hidden">
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="text-gray-700 w-24 shrink-0 text-sm">输出格式</span>
+                    <div class="flex gap-2">
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="radio" x-model="outputFormat" value="md" class="text-primary-600">
+                            <span class="text-sm text-gray-700">Markdown</span>
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="radio" x-model="outputFormat" value="txt" class="text-primary-600">
+                            <span class="text-sm text-gray-700">TXT</span>
+                        </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="radio" x-model="outputFormat" value="pdf" class="text-primary-600">
+                            <span class="text-sm text-gray-700">PDF</span>
+                        </label>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-400">
+                    Markdown 为文件夹形式（含图片），TXT / PDF 为单文件
+                </p>
             </div>
         </section>
 
@@ -172,13 +198,15 @@
             return {
                 singleUrl: '',
                 userId: '',
+                outputFormat: 'md',
+                downloadDir: '',
+                defaultDir: '~/lofter_downloads',
                 loginMessage: '',
                 loggedIn: false,
                 userName: '',
                 loginLoading: false,
                 loading: false,
                 tasks: [],
-                isDark: false,
                 pollId: null,
 
                 get completedTasks() {
@@ -195,18 +223,11 @@
                     this.checkLogin();
                     this.loadTasks();
                     this.pollId = setInterval(() => this.loadTasks(), 2000);
-                    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-                    this.isDark = mq.matches;
-                    if (this.isDark) document.documentElement.classList.add('dark');
-                    mq.addEventListener('change', e => {
-                        this.isDark = e.matches;
-                        document.documentElement.classList.toggle('dark', e.matches);
-                    });
-                },
-
-                toggleDark() {
-                    this.isDark = !this.isDark;
-                    document.documentElement.classList.toggle('dark');
+                    // 恢复上次的下载设置
+                    const savedFormat = localStorage.getItem('outputFormat');
+                    if (savedFormat) this.outputFormat = savedFormat;
+                    const savedDir = localStorage.getItem('downloadDir');
+                    if (savedDir) this.downloadDir = savedDir;
                 },
 
                 // --- 登录 ---
@@ -257,26 +278,59 @@
                     this.loginMessage = '';
                 },
 
+                // --- 目录选择 ---
+
+                pickFolder() {
+                    this.$refs.folderInput.click();
+                },
+
+                onFolderSelected() {
+                    const input = this.$refs.folderInput;
+                    if (input.files.length > 0) {
+                        // webkitRelativePath 获取相对路径，用第一个文件的父目录
+                        const relative = input.files[0].webkitRelativePath;
+                        const folderName = relative.split('/')[0];
+                        // 获取完整路径（仅 Chrome/Edge 支持）
+                        const fullPath = input.files[0].path || '';
+                        if (fullPath) {
+                            // 有完整路径直接用
+                            const dir = fullPath.replace(/[\\/][^\\/]+$/, '');
+                            this.downloadDir = dir;
+                        } else {
+                            this.downloadDir = folderName;
+                        }
+                    }
+                },
+
                 // --- 下载 ---
+
+                _buildBody(extra) {
+                    const body = { ...extra, format: this.outputFormat };
+                    if (this.downloadDir) body.download_dir = this.downloadDir;
+                    return body;
+                },
 
                 async downloadSingle() {
                     if (!this.singleUrl) return;
                     const u = this.singleUrl; this.singleUrl = '';
-                    await this._send('/api/download/post', { url: u });
+                    await this._send('/api/download/post', this._buildBody({ url: u }));
                 },
 
                 async downloadBlog() {
                     if (!this.userId) return;
-                    await this._send('/api/download/blog', { user_id: this.userId });
+                    await this._send('/api/download/blog', this._buildBody({ user_id: this.userId }));
                 },
 
                 async downloadLikes() {
                     if (!this.loggedIn) return;
-                    await this._send('/api/download/likes', {});
+                    await this._send('/api/download/likes', this._buildBody({}));
                 },
 
                 async _send(url, body) {
                     this.loading = true;
+                    // 持久化设置
+                    localStorage.setItem('outputFormat', this.outputFormat);
+                    localStorage.setItem('downloadDir', this.downloadDir);
                     try {
                         const r = await fetch(url, {
                             method: 'POST',

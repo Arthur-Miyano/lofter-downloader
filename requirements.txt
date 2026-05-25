@@ -5,3 +5,4 @@ lxml==6.1.1
 httpx==0.28.1
 aiofiles==25.1.0
 markdownify==1.2.2
+fpdf2==2.8.2
