@@ -1,163 +1,192 @@
 # LOFTER Downloader
 
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Flask](https://img.shields.io/badge/flask-3.x-black.svg)](https://flask.palletsprojects.com/)
+[![Flask](https://img.shields.io/badge/flask-3.x-black.svg?logo=flask)](https://flask.palletsprojects.com/)
+[![Playwright](https://img.shields.io/badge/playwright-1.x-2EAD33.svg?logo=playwright)](https://playwright.dev/)
 
-网易 LOFTER 文章下载器 — 通过浏览器 UI 一键下载 LOFTER 文章，支持 **Markdown**（含图片）、**TXT** 纯文本、**PDF** 三种导出格式。
+从网易 LOFTER 一键备份文章到本地。通过浏览器 UI 操作，支持 Markdown（含图片）、TXT 纯文本、PDF 三种导出格式。
 
-## 项目背景
+## Table of Contents
 
-LOFTER 已于 2026 年实施全站登录墙 — 所有页面未登录时强制跳转到登录页。这意味着：
+- [Background](#background)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Output Formats](#output-formats)
+- [Tech Stack](#tech-stack)
+- [FAQ](#faq)
+- [Development](#development)
+- [Disclaimer](#disclaimer)
 
-- 第三方下载工具（如直接 HTTP 请求）无法访问文章内容
-- 需要真实的浏览器环境完成登录（含拼图验证码）
-- 文章内容由 React SPA 动态渲染，需要等待 JS 执行后才能获取
+## Background
 
-本工具使用真实的 Chromium 浏览器登录并加载页面，将文章保存为本地文件，方便离线阅读和备份。
+LOFTER 自 2026 年起实施了全站登录墙 — 所有页面在未登录状态下强制跳转到 `/front/login`。这意味着：
 
-## 功能
+- 传统 HTTP 请求爬虫无法获取任何文章内容
+- 需要真实浏览器环境完成拼图验证码登录
+- 文章由 React SPA 动态渲染，必须等待 JavaScript 执行
 
-- **浏览器登录** — 一键启动 Chromium 窗口，手动完成登录（含验证码），登录状态自动持久化
-- **单篇下载** — 粘贴文章链接，下载单篇文章
-- **批量下载** — 输入作者数字 ID，下载该作者全部公开文章
-- **喜欢下载** — 一键下载你标记为"喜欢"的全部文章
-- **多格式导出** — Markdown（含图片文件夹）、TXT 纯文本、PDF（含中文字体）
-- **自定义目录** — 支持文本输入或文件夹浏览器选择保存位置
-- **进度追踪** — 实时显示下载进度，失败文章自动跳过不中断批量任务
+本工具通过 Playwright 驱动 Chromium 完成登录和页面加载，将文章保存为本地文件，方便离线阅读和数据备份。
 
-## 快速开始
+## Features
 
-### 系统要求
+**登录与认证**
+- 一键启动 Chromium 窗口，手动完成 LOFTER 登录（含拼图验证码）
+- 登录状态自动持久化，下次启动无需重新登录
+- 支持 Token 认证方式访问 API 接口
 
-- Python 3.10+
-- Chromium 浏览器（Playwright 会自动安装）
+**下载模式**
+- **单篇文章** — 粘贴链接，下载单篇
+- **作者全部文章** — 输入作者数字 ID，批量下载所有公开文章
+- **喜欢的文章** — 一键下载已标记为"喜欢"的全部文章（需登录）
 
-### 安装
+**导出格式**
+- **Markdown** — 文章正文 + 独立图片文件夹，适合归档和二次编辑
+- **TXT** — 纯文本单文件，不含图片，适合文本分析
+- **PDF** — 含 CJK 中文字体渲染的格式化文档，适合打印和分享
+
+**用户体验**
+- 自定义保存目录，支持文本输入或系统文件夹选择器
+- 实时显示下载进度，批量任务中单篇失败自动跳过继续
+- 支持任务取消，已下载内容会被保留
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10 or later
+- Chromium browser (auto-installed by Playwright)
+
+### Installation
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/your-username/lofter-downloader.git
+# 1. Clone the repository
+git clone https://github.com/Arthur-Miyano/lofter-downloader.git
 cd lofter-downloader
 
-# 2. 安装依赖
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. 安装 Chromium
+# 3. Install Chromium
 playwright install chromium
 
-# 4. 启动应用
+# 4. Start the application
 python app.py
 ```
 
-浏览器会自动打开 http://127.0.0.1:8080。
+Open http://127.0.0.1:8080 in your browser.
 
-### 使用流程
+## Usage
 
-1. **登录** — 点击「启动浏览器登录」，在弹出的 Chromium 窗口中完成 LOFTER 登录（支持手机扫码 / 账号密码）
-2. **检查登录** — 登录完成后点击「检查登录」，页面显示你的用户名即表示成功
-3. **选择设置** — 选择导出格式（Markdown / TXT / PDF）和保存目录（可选）
-4. **开始下载** — 根据需求选择下载方式（见下方）
-5. **等待完成** — 在任务列表中查看进度，完成后在保存目录中查看文件
+### Step 1: Login
 
-### 下载方式
+Click "Start Browser Login" — a Chromium window will open with the LOFTER login page. Complete the login manually (QR code scan or username/password).
 
-#### 单篇文章
+Click "Check Login" to verify. Once your username appears, you're ready.
 
-粘贴文章链接，点击下载。适用于保存特定文章。
+### Step 2: Choose Settings
 
-```
-https://xxxxxx.lofter.com/post/xxxxx_xxxxxxxxx
-```
+Select your preferred export format (Markdown / TXT / PDF) and optionally set a custom download directory.
 
-#### 作者全部文章
+### Step 3: Download
 
-输入作者的数字 ID（在 LOFTER 个人主页 URL 中可以找到），点击「下载全部」。
+Choose one of three download methods:
 
-> **如何获取作者数字 ID？**
-> 打开作者的 LOFTER 主页，URL 格式为 `https://xxxxxx.lofter.com`。在浏览器地址栏输入 `https://www.lofter.com/blog/xxxxxx`，页面跳转后的 URL 中包含数字 ID。
+| Method | What You Need | What It Does |
+|--------|--------------|--------------|
+| **Single Post** | Post URL (e.g. `https://xxxxxx.lofter.com/post/xxxxx_xxxxxxxxx`) | Downloads one specific article |
+| **Author Blog** | Author's numeric ID (find via `https://www.lofter.com/blog/xxxxxx`) | Downloads all public posts by an author |
+| **Liked Posts** | Must be logged in | Downloads all posts you've liked |
 
-#### 喜欢文章
+### Finding an Author's Numeric ID
 
-点击「下载喜欢」按钮，自动下载你标记为"喜欢"的全部文章（需要先登录）。
+Open the author's LOFTER page (`https://xxxxxx.lofter.com`), then visit `https://www.lofter.com/blog/xxxxxx` in your browser. The redirected URL will contain a numeric ID.
 
-## 配置
+### Step 4: Wait and Check
 
-在项目根目录创建 `.env` 文件（可选），支持以下配置项：
+Monitor progress in the task list. Files are saved to your chosen download directory once complete.
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `LOFTER_DOWNLOAD_DIR` | `~/lofter_downloads` | 下载文件保存目录 |
-| `LOFTER_SESSION_PATH` | `~/.lofter_downloader/lofter_auth.json` | 登录会话文件路径 |
-| `LOFTER_REQUEST_INTERVAL` | `2.0` | 请求间隔（秒），避免触发反爬 |
-| `LOFTER_MAX_RETRIES` | `2` | 下载失败最大重试次数 |
-| `LOFTER_REQUEST_TIMEOUT` | `30` | 网络请求超时（秒） |
-| `LOFTER_LOG_LEVEL` | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
-| `LOFTER_HOST` | `127.0.0.1` | 服务器监听地址 |
-| `LOFTER_PORT` | `8080` | 服务器监听端口 |
+## Configuration
 
-## 输出格式说明
+Create a `.env` file in the project root (optional). All variables are prefixed with `LOFTER_`:
 
-### Markdown（默认）
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOFTER_DOWNLOAD_DIR` | `~/lofter_downloads` | Output directory for downloaded files |
+| `LOFTER_SESSION_PATH` | `~/.lofter_downloader/lofter_auth.json` | Session storage path |
+| `LOFTER_REQUEST_INTERVAL` | `2.0` | Delay between requests (seconds), for rate limiting |
+| `LOFTER_MAX_RETRIES` | `2` | Max retries on download failure |
+| `LOFTER_REQUEST_TIMEOUT` | `30` | Network request timeout (seconds) |
+| `LOFTER_LOG_LEVEL` | `INFO` | Logging level (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
+| `LOFTER_HOST` | `127.0.0.1` | Server listen address |
+| `LOFTER_PORT` | `8080` | Server listen port |
 
-每篇文章保存为独立文件夹，含 `index.md` 和 `images/` 子目录：
+## Output Formats
+
+### Markdown (default)
+
+Each post saved as a folder with `index.md` and an `images/` subdirectory:
 
 ```
 lofter_downloads/
-└── 单篇下载/
-    └── 文章标题/
-        ├── index.md      # 文章正文（Markdown 格式）
+└── Single Posts/
+    └── Post Title/
+        ├── index.md      # Post content in Markdown
         └── images/
-            ├── 001.jpg   # 文中图片
+            ├── 001.jpg
             └── 002.png
 ```
 
 ### TXT
 
-每篇文章保存为单个 `.txt` 文件，纯文本不含图片：
+Each post saved as a single `.txt` file, plain text without images:
 
 ```
 lofter_downloads/
-└── 单篇下载/
-    └── 文章标题.txt      # 标题 + 元数据 + 正文
+└── Single Posts/
+    └── Post Title.txt    # Title + metadata + body
 ```
 
 ### PDF
 
-每篇文章保存为单个 `.pdf` 文件，含中文字体渲染，适合打印和分享：
+Each post saved as a single `.pdf` file with CJK font rendering:
 
 ```
 lofter_downloads/
-└── 单篇下载/
-    └── 文章标题.pdf      # 格式化的 PDF 文档
+└── Single Posts/
+    └── Post Title.pdf    # Formatted PDF document
 ```
 
-## 技术架构
+## Tech Stack
 
-| 层次 | 技术 |
-|------|------|
-| Web 框架 | Flask（多线程开发服务器） |
-| 前端 | Alpine.js + Tailwind CSS（CDN，零构建） |
-| 浏览器自动化 | Playwright Chromium（加载 SPA + 执行 JS） |
-| HTML 解析 | BeautifulSoup4 + lxml |
-| 图片下载 | httpx（携带 Cookie + Referer） |
-| PDF 生成 | fpdf2（CJK 字体支持） |
+| Layer | Technology |
+|-------|-----------|
+| Web Framework | Flask (multi-threaded dev server) |
+| Frontend | Alpine.js + Tailwind CSS (CDN, zero build step) |
+| Browser Automation | Playwright Chromium (SPA rendering + JS execution) |
+| HTML Parsing | BeautifulSoup4 + lxml |
+| Image Download | httpx (with Cookie + Referer headers) |
+| PDF Generation | fpdf2 (with CJK font support) |
 
-详细设计文档见 [docs/design.md](docs/design.md)，功能需求见 [docs/requirements.md](docs/requirements.md)。
+For detailed architecture documentation, see [docs/design.md](docs/design.md).
 
-## 常见问题（FAQ）
+## FAQ
 
-### 登录后下载仍然失败？
+<details>
+<summary><strong>Login succeeded but downloads fail?</strong></summary>
+The session may have expired. Use "Clear Login" and re-authenticate, then retry.
+</details>
 
-登录会话有时效性。点击「清除登录」后重新登录，然后重试下载。
+<details>
+<summary><strong>Downloaded articles have empty content?</strong></summary>
+Some LOFTER articles use newer templates that may not parse correctly. Please file an issue with the article URL.
+</details>
 
-### 下载的文章内容为空？
-
-部分 LOFTER 文章使用较新的模板，可能无法完全提取。请提交 Issue 并附上文章链接。
-
-### PDF 中文显示为方框？
-
-PDF 导出需要系统中安装 CJK 字体。Windows 系统通常自带微软雅黑，Linux 需安装 `fonts-noto-cjk`：
+<details>
+<summary><strong>PDF shows boxes instead of Chinese characters?</strong></summary>
+CJK fonts are required for PDF export. Windows typically includes Microsoft YaHei by default. On Linux:
 
 ```bash
 # Ubuntu / Debian
@@ -166,38 +195,41 @@ sudo apt install fonts-noto-cjk
 # CentOS / Fedora
 sudo dnf install google-noto-cjk-fonts
 ```
+</details>
 
-### 提示「已有下载任务在进行中」？
+<details>
+<summary><strong>"A download task is already in progress"?</strong></summary>
+Only one download task can run at a time. Wait for the current task to finish or cancel it first.
+</details>
 
-同一时间只能运行一个下载任务。请等待当前任务完成或取消后再提交新任务。
+<details>
+<summary><strong>How do I cancel a running download?</strong></summary>
+Click the "Cancel" button on the task in the task list. Already-downloaded articles are kept.
+</details>
 
-### 如何取消正在进行的下载？
-
-在任务列表中点击对应任务的「取消」按钮。已下载的文章会保留在保存目录中。
-
-## 开发指南
+## Development
 
 ```bash
-# 安装开发依赖
+# Install dev dependencies
 pip install -e ".[dev]"
 
-# 运行测试
+# Run all tests
 pytest
 
-# 运行特定测试
+# Run specific tests
 pytest tests/test_parser.py -k test_parse_basic_post
 
-# 代码检查
+# Lint
 ruff check .
 
-# 格式化
+# Format
 ruff format .
 ```
 
-## 免责声明
+## Disclaimer
 
-本工具仅供个人学习和内容备份使用。下载的文章请勿用于商业用途或二次发布。使用本工具即表示你同意遵守 LOFTER 的服务条款和相关法律法规。
+This tool is for personal learning and content backup only. Downloaded articles may not be used for commercial purposes or redistribution. By using this tool, you agree to comply with LOFTER's Terms of Service and applicable laws.
 
-## 开源许可
+## License
 
-MIT License
+[MIT](LICENSE)
