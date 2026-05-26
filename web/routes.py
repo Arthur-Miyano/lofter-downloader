@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 
 from flask import Blueprint, jsonify, request
 
@@ -44,6 +45,7 @@ _user_name = ""
 
 # 下载并发控制
 _running_task_id: str | None = None  # 当前运行中的任务 ID
+_task_lock = threading.Lock()
 
 
 # ------------------------------------------------------------------
@@ -104,7 +106,7 @@ def login_start():
         }
 
     try:
-        result = browser.submit(_start(), timeout=30)
+        result = browser.submit(_start(), timeout=60)
         if not result.get("ok", True):
             _login_in_progress = False
             return jsonify(result), 500
@@ -250,19 +252,23 @@ def _create_download_task(task_type: str, coro_func, *args) -> tuple:
     """创建下载任务，含并发控制和会话校验。"""
     global _running_task_id
 
-    # 并发控制：同一时间只允许一个下载任务
-    if _running_task_id is not None:
-        running_task = task_manager.get(_running_task_id)
-        if running_task and running_task.status in (
-            TaskStatus.PENDING, TaskStatus.RUNNING,
-        ):
-            return jsonify(
-                ok=False,
-                error="已有下载任务在进行中，请等待完成后再提交新任务",
-            ), 409
+    # 自动清理旧任务
+    task_manager.cleanup()
 
-    task_id = task_manager.create(task_type)
-    _running_task_id = task_id
+    # 并发控制：同一时间只允许一个下载任务
+    with _task_lock:
+        if _running_task_id is not None:
+            running_task = task_manager.get(_running_task_id)
+            if running_task and running_task.status in (
+                TaskStatus.PENDING, TaskStatus.RUNNING,
+            ):
+                return jsonify(
+                    ok=False,
+                    error="已有下载任务在进行中，请等待完成后再提交新任务",
+                ), 409
+
+        task_id = task_manager.create(task_type)
+        _running_task_id = task_id
 
     async def _wrapped():
         global _running_task_id
@@ -281,13 +287,17 @@ def _create_download_task(task_type: str, coro_func, *args) -> tuple:
                         status=TaskStatus.FAILED,
                         error="登录会话已过期，请重新登录后再下载",
                     )
+                    global _running_task_id
+                    if _running_task_id == task_id:
+                        _running_task_id = None
                     return
             await coro_func(task_id, *args)
         finally:
             if _running_task_id == task_id:
                 _running_task_id = None
 
-    browser.submit_async(_wrapped())
+    future = browser.submit_async(_wrapped())
+    task_manager.set_future(task_id, future)
     return jsonify(task_id=task_id)
 
 
@@ -319,7 +329,7 @@ def cancel_task(task_id: str):
     task = task_manager.get(task_id)
     if task is None:
         return jsonify(ok=False, error="任务不存在"), 404
-    if task.status == TaskStatus.RUNNING:
+    if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
         cancelled = task_manager.cancel(task_id)
         if task_id == _running_task_id:
             _running_task_id = None
@@ -342,6 +352,7 @@ async def _run_post(task_id: str, url: str, fmt: str = "md",
     task_manager.update(task_id, status=TaskStatus.RUNNING)
     pipeline = DownloadPipeline(browser)
     try:
+        _check_cancelled(task_id)
         results = await pipeline.run_post(url)
         if results:
             await _save_results(results, sub_dir="单篇下载", fmt=fmt,
@@ -372,8 +383,11 @@ async def _run_blog(task_id: str, user_id: str, fmt: str = "md",
 
     task_manager.update(task_id, status=TaskStatus.RUNNING)
     pipeline = DownloadPipeline(browser)
+    _check_cancelled(task_id)
+    storage = str(SESSION_PATH) if SESSION_PATH.exists() else None
+    ctx = await browser.new_context(storage_state=storage)
     try:
-        links, blog_name = await pipeline.collect_blog_links(user_id)
+        links, blog_name = await pipeline.collect_blog_links(user_id, context=ctx)
         if not links:
             task_manager.update(
                 task_id, status=TaskStatus.FAILED,
@@ -387,23 +401,27 @@ async def _run_blog(task_id: str, user_id: str, fmt: str = "md",
         for idx, link in enumerate(links):
             _check_cancelled(task_id)
             try:
-                results = await pipeline.run_post(link)
+                results = await pipeline.run_post(link, context=ctx)
                 if results:
                     await _save_results(results, sub_dir=user_id, fmt=fmt,
                                         dl_dir=dl_dir)
                 task_manager.update(
                     task_id,
                     current=idx + 1,
-                    message=results[0].get("title", "") if results else link,
+                    message=(
+                        results[0].get("title", "")
+                        if results else f"空内容: {link[:40]}"
+                    ),
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("跳过失败文章 %s: %s", link, exc)
+                reason = _classify_error(exc)
+                logger.warning("跳过失败博客文章 [%s]: %s", reason, link)
                 task_manager.update(
-                    task_id, current=idx + 1, message=f"跳过: {link[:50]}"
+                    task_id, current=idx + 1,
+                    message=f"跳过({reason}): {link[:40]}",
                 )
-            # 逐篇间隔，避免触发反爬
             from config import REQUEST_INTERVAL
             await asyncio.sleep(REQUEST_INTERVAL)
 
@@ -413,6 +431,8 @@ async def _run_blog(task_id: str, user_id: str, fmt: str = "md",
     except Exception as exc:
         logger.exception("下载博客失败")
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
+    finally:
+        await ctx.close()
 
 
 async def _run_likes(task_id: str, fmt: str = "md",
@@ -422,8 +442,11 @@ async def _run_likes(task_id: str, fmt: str = "md",
 
     task_manager.update(task_id, status=TaskStatus.RUNNING)
     pipeline = DownloadPipeline(browser)
+    _check_cancelled(task_id)
+    storage = str(SESSION_PATH) if SESSION_PATH.exists() else None
+    ctx = await browser.new_context(storage_state=storage)
     try:
-        links = await pipeline.collect_likes_links()
+        links = await pipeline.collect_likes_links(context=ctx)
         if not links:
             task_manager.update(
                 task_id,
@@ -436,21 +459,26 @@ async def _run_likes(task_id: str, fmt: str = "md",
         for idx, link in enumerate(links):
             _check_cancelled(task_id)
             try:
-                results = await pipeline.run_post(link)
+                results = await pipeline.run_post(link, context=ctx)
                 if results:
                     await _save_results(results, sub_dir="喜欢文章", fmt=fmt,
                                         dl_dir=dl_dir)
                 task_manager.update(
                     task_id,
                     current=idx + 1,
-                    message=results[0].get("title", "") if results else link,
+                    message=(
+                        results[0].get("title", "")
+                        if results else f"空内容: {link[:40]}"
+                    ),
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.warning("跳过失败文章 %s: %s", link, exc)
+                reason = _classify_error(exc)
+                logger.warning("跳过失败喜欢文章 [%s]: %s", reason, link)
                 task_manager.update(
-                    task_id, current=idx + 1, message=f"跳过: {link[:50]}"
+                    task_id, current=idx + 1,
+                    message=f"跳过({reason}): {link[:40]}",
                 )
             from config import REQUEST_INTERVAL
             await asyncio.sleep(REQUEST_INTERVAL)
@@ -461,6 +489,8 @@ async def _run_likes(task_id: str, fmt: str = "md",
     except Exception as exc:
         logger.exception("下载喜欢失败")
         task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
+    finally:
+        await ctx.close()
 
 
 async def _save_results(
@@ -472,7 +502,11 @@ async def _save_results(
 
     from downloader.saver import PostSaver
 
-    base_dir = Path(dl_dir).resolve() if dl_dir else DOWNLOAD_DIR
+    if dl_dir:
+        dl_path = Path(dl_dir)
+        base_dir = dl_path.resolve() if dl_path.is_absolute() else DOWNLOAD_DIR / dl_dir
+    else:
+        base_dir = DOWNLOAD_DIR
     storage = load_storage_state()
     cookies = []
     if storage and "cookies" in storage:
@@ -496,6 +530,25 @@ def _check_cancelled(task_id: str) -> None:
     task = task_manager.get(task_id)
     if task and task.status == TaskStatus.CANCELED:
         raise asyncio.CancelledError()
+
+
+def _classify_error(exc: Exception) -> str:
+    """将异常分类为短中文标签，供前端 task.message 展示。"""
+    from downloader.exceptions import LoginRequiredError, NetworkError, ParseError
+
+    msg = str(exc)
+    if isinstance(exc, ParseError):
+        return "解析失败"
+    if isinstance(exc, NetworkError):
+        return "网络错误"
+    if isinstance(exc, LoginRequiredError):
+        return "需登录"
+    if "timeout" in msg.lower() or "超时" in msg:
+        return "超时"
+    if "login" in msg.lower() or "session" in msg.lower():
+        return "需登录"
+    # 截断技术异常，只给用户看前 10 个字符
+    return msg[:10] if msg else "未知错误"
 
 
 def _user_error(exc: Exception) -> str:

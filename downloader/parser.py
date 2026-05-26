@@ -100,13 +100,14 @@ def _parse_title_tag(raw_title: str) -> tuple[str, str]:
     """从 <title> 解析文章标题和作者。
 
     LOFTER 格式: "{文章标题}-{作者名}"
+    按最后一个分隔符拆分，避免标题中多个连字符的影响。
     返回 (title, author)。
     """
     if not raw_title:
         return "", ""
-    parts = re.split(r"\s*[-–—]\s*", raw_title)
-    if len(parts) >= 2:
-        return parts[0].strip(), parts[-1].strip()
+    m = re.search(r"^(.*)[-–—]([^-–—]+)$", raw_title.strip())
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
     return raw_title.strip(), ""
 
 
@@ -115,11 +116,12 @@ def _find_largest_text_block(soup: BeautifulSoup) -> object | None:
     best_el = None
     best_len = 0
     for el in soup.select("div, article, section, main"):
-        # 跳过导航、页脚、脚本等
+        # 跳过导航、页脚、脚本等（使用 token 精确匹配而非子串包含）
         cls = (el.get("class") or [""])[0] if el.get("class") else ""
-        if any(kw in str(cls).lower() for kw in
-               ("nav", "footer", "header", "sidebar", "menu", "script",
-                "recommend", "ad", "banner", "comment", "tag")):
+        cls_str = str(cls).lower()
+        tokens = set(re.split(r"[\s\-_]+", cls_str))
+        if tokens & {"nav", "footer", "header", "sidebar", "menu", "script",
+                       "recommend", "ad", "banner", "comment", "tag"}:
             continue
         text = el.get_text(strip=True)
         if len(text) > best_len:
@@ -142,13 +144,18 @@ def _extract_author(soup: BeautifulSoup) -> str:
 
 
 def _extract_date_from_text(body_text: str, content_html: str) -> str:
-    """从文本中匹配日期：YYYY-MM-DD 或 YYYY.MM.DD 或 YYYY年MM月DD日。"""
-    combined = body_text or content_html
-    for pattern in (r"(\d{4}-\d{2}-\d{2})", r"(\d{4}\.\d{2}\.\d{2})",
-                    r"(\d{4}年\d{1,2}月\d{1,2}日)"):
-        m = re.search(pattern, combined)
-        if m:
-            return m.group(1).replace(".", "-").replace("年", "-").replace("月", "-").replace("日", "")
+    """从文本中匹配日期：YYYY-MM-DD 或 YYYY.MM.DD 或 YYYY年MM月DD日。
+
+    优先在 content_html 中搜索，仅未找到时才回退到全页 body_text。
+    """
+    for source in (content_html, body_text):
+        if not source:
+            continue
+        for pattern in (r"(\d{4}-\d{2}-\d{2})", r"(\d{4}\.\d{2}\.\d{2})",
+                        r"(\d{4}年\d{1,2}月\d{1,2}日)"):
+            m = re.search(pattern, source)
+            if m:
+                return m.group(1).replace(".", "-").replace("年", "-").replace("月", "-").replace("日", "")
     return ""
 
 

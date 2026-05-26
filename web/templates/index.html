@@ -66,18 +66,13 @@
             <h2 class="text-lg font-semibold text-gray-800 mb-4">⚙️ 下载设置</h2>
             <div class="space-y-3">
                 <div class="flex items-center gap-3">
-                    <span class="text-gray-700 w-24 shrink-0 text-sm">保存目录</span>
-                    <div class="flex-1 flex gap-2">
-                        <input type="text" x-model="downloadDir" :placeholder="'默认: ' + defaultDir"
-                            class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm">
-                        <button @click="pickFolder()"
-                            class="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm whitespace-nowrap border border-gray-300">
-                            📁 浏览
-                        </button>
-                    </div>
-                    <input type="file" id="folderPicker" webkitdirectory directory x-ref="folderInput"
-                        @change="onFolderSelected()" class="hidden">
+                    <span class="text-gray-700 w-24 shrink-0 text-sm">子目录名</span>
+                    <input type="text" x-model="downloadDir" placeholder="留空使用默认下载目录"
+                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm">
                 </div>
+                <p class="text-xs text-gray-400 ml-[108px]">
+                    填入子目录名（非完整路径），如 «我的博客»，留空则使用默认下载目录
+                </p>
                 <div class="flex items-center gap-3">
                     <span class="text-gray-700 w-24 shrink-0 text-sm">输出格式</span>
                     <div class="flex gap-2">
@@ -93,10 +88,14 @@
                             <input type="radio" x-model="outputFormat" value="pdf" class="text-primary-600">
                             <span class="text-sm text-gray-700">PDF</span>
                         </label>
+                        <label class="flex items-center gap-1 cursor-pointer">
+                            <input type="radio" x-model="outputFormat" value="epub" class="text-primary-600">
+                            <span class="text-sm text-gray-700">EPUB</span>
+                        </label>
                     </div>
                 </div>
                 <p class="text-xs text-gray-400">
-                    Markdown 为文件夹形式（含图片），TXT / PDF 为单文件
+                    Markdown 为文件夹形式（含图片），TXT / PDF / EPUB 为单文件
                 </p>
             </div>
         </section>
@@ -202,6 +201,7 @@
                 downloadDir: '',
                 defaultDir: '~/lofter_downloads',
                 loginMessage: '',
+                _loginOk: null,
                 loggedIn: false,
                 userName: '',
                 loginLoading: false,
@@ -214,8 +214,8 @@
                 },
 
                 get loginMessageClass() {
-                    if (this.loginMessage.includes('✅')) return 'text-green-600';
-                    if (this.loginMessage.includes('❌')) return 'text-red-500';
+                    if (this._loginOk === true) return 'text-green-600';
+                    if (this._loginOk === false) return 'text-red-500';
                     return 'text-blue-600';
                 },
 
@@ -243,31 +243,43 @@
 
                 async startLogin() {
                     this.loginLoading = true;
-                    this.loginMessage = '⏳ 正在启动浏览器…';
+                    this.loginMessage = '正在启动浏览器…';
+                    this._loginOk = null;
                     try {
                         const r = await fetch('/api/login/start', { method: 'POST' });
                         const d = await r.json();
-                        this.loginMessage = d.ok ? '🌐 浏览器已打开，请完成登录后点击「检查登录」' : ('❌ ' + (d.error || '启动失败'));
+                        if (d.ok) {
+                            this.loginMessage = d.message || '浏览器已打开，请完成登录后点击「检查登录」';
+                            this._loginOk = true;
+                        } else {
+                            this.loginMessage = '启动失败: ' + (d.error || '未知错误');
+                            this._loginOk = false;
+                        }
                     } catch (e) {
-                        this.loginMessage = '❌ 网络错误';
+                        this.loginMessage = '网络错误';
+                        this._loginOk = false;
                     } finally { this.loginLoading = false; }
                 },
 
                 async checkLoginStatus() {
                     this.loginLoading = true;
-                    this.loginMessage = '⏳ 检查中…';
+                    this.loginMessage = '检查中…';
+                    this._loginOk = null;
                     try {
                         const r = await fetch('/api/login/check', { method: 'POST' });
                         const d = await r.json();
                         if (d.logged_in) {
                             this.loggedIn = true;
                             if (d.user_name) this.userName = d.user_name;
-                            this.loginMessage = '✅ 登录成功！';
+                            this.loginMessage = '登录成功！';
+                            this._loginOk = true;
                         } else {
-                            this.loginMessage = '⏳ 尚未检测到登录，请确认已在浏览器中完成登录';
+                            this.loginMessage = '尚未检测到登录，请确认已在浏览器中完成登录';
+                            this._loginOk = null;
                         }
                     } catch (e) {
-                        this.loginMessage = '❌ 网络错误';
+                        this.loginMessage = '网络错误';
+                        this._loginOk = false;
                     } finally { this.loginLoading = false; }
                 },
 
@@ -276,36 +288,14 @@
                     this.loggedIn = false;
                     this.userName = '';
                     this.loginMessage = '';
-                },
-
-                // --- 目录选择 ---
-
-                pickFolder() {
-                    this.$refs.folderInput.click();
-                },
-
-                onFolderSelected() {
-                    const input = this.$refs.folderInput;
-                    if (input.files.length > 0) {
-                        // webkitRelativePath 获取相对路径，用第一个文件的父目录
-                        const relative = input.files[0].webkitRelativePath;
-                        const folderName = relative.split('/')[0];
-                        // 获取完整路径（仅 Chrome/Edge 支持）
-                        const fullPath = input.files[0].path || '';
-                        if (fullPath) {
-                            // 有完整路径直接用
-                            const dir = fullPath.replace(/[\\/][^\\/]+$/, '');
-                            this.downloadDir = dir;
-                        } else {
-                            this.downloadDir = folderName;
-                        }
-                    }
+                    this._loginOk = null;
                 },
 
                 // --- 下载 ---
 
                 _buildBody(extra) {
-                    const body = { ...extra, format: this.outputFormat };
+                    const fmt = ['md', 'txt', 'pdf', 'epub'].includes(this.outputFormat) ? this.outputFormat : 'md';
+                    const body = { ...extra, format: fmt };
                     if (this.downloadDir) body.download_dir = this.downloadDir;
                     return body;
                 },

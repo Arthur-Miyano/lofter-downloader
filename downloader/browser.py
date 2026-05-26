@@ -38,6 +38,7 @@ class BrowserManager:
         self._playwright: Any = None
         self._browser: Browser | None = None
         self._ready = threading.Event()
+        self._atexit_registered = False
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -56,11 +57,14 @@ class BrowserManager:
         self._thread = threading.Thread(target=_run_loop, daemon=True)
         self._thread.start()
         if not self._ready.wait(timeout=30):
+            self.stop()
             raise LofterError(
                 "BrowserManager 启动超时，请检查 Playwright/Chromium 是否安装"
             )
 
-        atexit.register(self.stop)
+        if not self._atexit_registered:
+            atexit.register(self.stop)
+            self._atexit_registered = True
         logger.info("BrowserManager started (headless=%s)", self._headless)
 
     def stop(self) -> None:
@@ -77,9 +81,11 @@ class BrowserManager:
         try:
             asyncio.run_coroutine_threadsafe(_shutdown(), self._loop).result(timeout=10)
             self._loop.call_soon_threadsafe(self._loop.stop)
-            logger.info("BrowserManager shut down")
         except Exception:
             pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        logger.info("BrowserManager shut down")
 
     async def _init_browser(self) -> None:
         self._playwright = await async_playwright().start()
@@ -103,14 +109,14 @@ class BrowserManager:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
-    def submit_async(self, coro: Any) -> None:
-        """提交协程到浏览器线程，立即返回（不等待结果）。
+    def submit_async(self, coro: Any) -> asyncio.Future:
+        """提交协程到浏览器线程，返回 Future（不阻塞）。
 
-        用于下载等长时间任务。
+        用于下载等长时间任务。调用方可通过 Future 取消任务。
         """
         if self._loop is None or not self._loop.is_running():
             raise LofterError("浏览器事件循环未运行")
-        asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     # ------------------------------------------------------------------
     # BrowserContext 管理

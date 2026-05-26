@@ -29,6 +29,7 @@ dependencies = [
     "aiofiles==25.1.0",
     "markdownify==1.2.2",
     "fpdf2==2.8.2",
+    "ebooklib==0.18",
 ]
 
 [project.optional-dependencies]

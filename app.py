@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
+import sys
 import webbrowser
 from pathlib import Path
 
@@ -66,6 +68,14 @@ def _setup_logging() -> None:
 def main() -> None:
     """CLI 入口。"""
     logger = logging.getLogger(__name__)
+
+    def _shutdown(signum: int, _frame: object) -> None:
+        logger.info("收到退出信号 (%s)，正在清理...", signum)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
     logger.info("启动 LOFTER 下载器 http://%s:%s", HOST, PORT)
 
     # 自动打开浏览器

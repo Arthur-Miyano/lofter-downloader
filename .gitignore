@@ -36,3 +36,7 @@ downloads/
 # OS
 .DS_Store
 Thumbs.db
+
+# Debug
+diagnose.py
+diagnose_output.txt

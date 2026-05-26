@@ -25,7 +25,7 @@ def _load_dotenv() -> None:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
-            val = val.strip().strip('"').strip("'")
+            val = val.strip().strip("'\"")
             if key not in os.environ:
                 os.environ[key] = val
 
@@ -92,7 +92,12 @@ SESSION_PATH = _parse_path(
 REQUEST_INTERVAL = _parse_float("LOFTER_REQUEST_INTERVAL", 2.0, min_val=0.1)
 MAX_RETRIES = _parse_int("LOFTER_MAX_RETRIES", 2, min_val=0)
 REQUEST_TIMEOUT = _parse_int("LOFTER_REQUEST_TIMEOUT", 30, min_val=5)
-LOG_LEVEL = os.getenv("LOFTER_LOG_LEVEL", "INFO").upper()
+_raw_level = os.getenv("LOFTER_LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = _raw_level if hasattr(logging, _raw_level) else "INFO"
+if _raw_level != LOG_LEVEL:
+    logger.warning(
+        "LOFTER_LOG_LEVEL=%s 不是有效的日志级别，使用默认值 INFO", _raw_level
+    )
 
 _HOST_DEFAULT = "127.0.0.1"
 HOST = os.getenv("LOFTER_HOST", _HOST_DEFAULT) or _HOST_DEFAULT

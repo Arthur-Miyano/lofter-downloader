@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page
@@ -31,15 +32,19 @@ def load_storage_state(path: str | None = None) -> dict | None:
     """读取已保存的 storageState 文件。"""
     p = path or str(SESSION_PATH)
     if os.path.exists(p):
-        with open(p, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("会话文件读取失败: %s", exc)
+            return None
     return None
 
 
 async def start_login(
     playwright: Any,
     loop: asyncio.AbstractEventLoop,
-    on_timeout: object = None,
+    on_timeout: Callable[[], None] | None = None,
 ) -> tuple[Browser, BrowserContext, Page]:
     """启动 headed 浏览器并导航到 LOFTER 登录页。
 

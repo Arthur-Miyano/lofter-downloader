@@ -19,5 +19,3 @@ class NetworkError(LofterError):
     """网络请求失败。"""
 
 
-class TaskCanceledError(LofterError):
-    """任务被用户取消。"""
