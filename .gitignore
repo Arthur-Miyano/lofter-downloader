@@ -8,6 +8,8 @@ build/
 .venv/
 venv/
 env/
+.pytest_cache/
+.ruff_cache/
 
 # IDE
 .vscode/

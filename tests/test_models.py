@@ -105,9 +105,7 @@ class TestTaskManager:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=_worker) for _ in range(4)
-        ]
+        threads = [threading.Thread(target=_worker) for _ in range(4)]
         for t in threads:
             t.start()
         for t in threads:

@@ -55,7 +55,7 @@ class Task:
     """下载任务追踪。"""
 
     task_id: str
-    type: str  # "post" | "blog" | "likes"
+    type: str  # "post" | "blog" | "likes" | "ao3" | "list_blog" | "list_ao3"
     status: TaskStatus = TaskStatus.PENDING
     current: int = 0
     total: int = 0
@@ -81,6 +81,7 @@ class Task:
             "total": self.total,
             "message": self.message,
             "error": self.error,
+            "result": self.result,
             "created_at": self.created_at.isoformat(),
         }
 

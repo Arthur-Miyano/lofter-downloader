@@ -57,7 +57,8 @@ class TestExtractPost:
         assert result["author"] == "作者名"
 
     async def test_all_strategies_fail_raises_parse_error(
-        self, mock_page: AsyncMock,
+        self,
+        mock_page: AsyncMock,
     ) -> None:
         """无法提取内容时抛出 ParseError。"""
         from downloader.exceptions import ParseError

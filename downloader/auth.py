@@ -96,7 +96,8 @@ async def check_login(page: Page) -> tuple[bool, str]:
     try:
         await page.goto(
             "https://www.lofter.com/settings",
-            wait_until="domcontentloaded", timeout=10000,
+            wait_until="domcontentloaded",
+            timeout=10000,
         )
         if "/front/login" not in page.url:
             username = (

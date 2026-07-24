@@ -3,231 +3,864 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LOFTER 文章下载器</title>
+    <title>LOFTER 下载器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
-            theme: { extend: { colors: { primary: {50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a'} } } }
+            darkMode: 'media',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', '"PingFang SC"', '"HarmonyOS Sans SC"', '"Microsoft YaHei"', '"Segoe UI"', 'sans-serif'],
+                        display: ['"Noto Serif SC"', '"Songti SC"', '"SimSun"', 'serif'],
+                    },
+                }
+            }
         }
     </script>
+    <style>
+        /* ============ 设计令牌 ============ */
+        :root {
+            --ease-spring: cubic-bezier(.32, .72, 0, 1);
+            --ease-out: cubic-bezier(.22, 1, .36, 1);
+
+            --bg: #f4f2ee;                       /* 暖纸 */
+            --panel: rgba(255, 255, 255, .62);
+            --panel-strong: rgba(255, 255, 255, .8);
+            --line: rgba(35, 28, 20, .09);
+            --text: #221e19;
+            --text-2: rgba(34, 30, 25, .58);
+            --text-3: rgba(34, 30, 25, .38);
+            --field: rgba(35, 28, 20, .055);
+            --field-focus: rgba(99, 102, 241, .22);
+            --accent1: #6366f1;
+            --accent2: #a855f7;
+            --accent3: #22d3ee;
+            --glow: rgba(139, 92, 246, .35);
+            --panel-shadow: 0 10px 32px -14px rgba(80, 60, 140, .22);
+            --aurora-opacity: .5;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #08080f;                   /* 深夜 */
+                --panel: rgba(255, 255, 255, .05);
+                --panel-strong: rgba(255, 255, 255, .08);
+                --line: rgba(255, 255, 255, .09);
+                --text: #eceef5;
+                --text-2: rgba(236, 238, 245, .58);
+                --text-3: rgba(236, 238, 245, .36);
+                --field: rgba(255, 255, 255, .06);
+                --field-focus: rgba(139, 92, 246, .38);
+                --glow: rgba(139, 92, 246, .5);
+                --panel-shadow: 0 14px 44px -14px rgba(0, 0, 0, .65);
+                --aurora-opacity: .32;
+            }
+        }
+
+        html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+        body { background: var(--bg); color: var(--text); }
+
+        /* ============ 极光氛围背景 ============ */
+        .aurora { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+        .aurora span {
+            position: absolute; border-radius: 50%;
+            filter: blur(110px); opacity: var(--aurora-opacity);
+            will-change: transform;
+        }
+        .aurora .a1 {
+            width: 44vw; height: 44vw; top: -14vw; left: -10vw;
+            background: radial-gradient(circle, var(--accent1) 0%, transparent 68%);
+            animation: drift1 38s ease-in-out infinite alternate;
+        }
+        .aurora .a2 {
+            width: 38vw; height: 38vw; bottom: -16vw; right: -8vw;
+            background: radial-gradient(circle, var(--accent2) 0%, transparent 68%);
+            animation: drift2 46s ease-in-out infinite alternate;
+        }
+        .aurora .a3 {
+            width: 26vw; height: 26vw; top: 32%; right: 16%;
+            background: radial-gradient(circle, var(--accent3) 0%, transparent 70%);
+            opacity: calc(var(--aurora-opacity) * .55);
+            animation: drift3 52s ease-in-out infinite alternate;
+        }
+        @keyframes drift1 { from { transform: translate(0, 0) scale(1); } to { transform: translate(9vw, 6vh) scale(1.15); } }
+        @keyframes drift2 { from { transform: translate(0, 0) scale(1.1); } to { transform: translate(-8vw, -7vh) scale(.95); } }
+        @keyframes drift3 { from { transform: translate(0, 0); } to { transform: translate(-6vw, 8vh); } }
+
+        /* ============ 组件 ============ */
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            box-shadow: var(--panel-shadow);
+            backdrop-filter: blur(22px) saturate(1.4);
+            -webkit-backdrop-filter: blur(22px) saturate(1.4);
+        }
+
+        .t2 { color: var(--text-2); }
+        .t3 { color: var(--text-3); }
+
+        .caption {
+            font-size: 10px; letter-spacing: .28em; text-transform: uppercase;
+            background: linear-gradient(90deg, var(--accent1), var(--accent2));
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent1), var(--accent2));
+            color: #fff;
+            transition: transform .16s var(--ease-out), box-shadow .28s var(--ease-out), opacity .2s, filter .2s;
+        }
+        .btn-primary:not(:disabled):hover { box-shadow: 0 6px 22px -6px var(--glow); filter: brightness(1.08); }
+        .btn-primary:not(:disabled):active { transform: scale(.96); }
+        .btn-primary:disabled { opacity: .35; cursor: not-allowed; }
+
+        .btn-ghost {
+            background: var(--field); color: var(--text-2);
+            transition: transform .16s var(--ease-out), background-color .2s, color .2s;
+        }
+        .btn-ghost:not(:disabled):hover { background: var(--panel-strong); color: var(--text); }
+        .btn-ghost:not(:disabled):active { transform: scale(.96); }
+        .btn-ghost:disabled { opacity: .45; cursor: not-allowed; }
+
+        .input {
+            background: var(--field);
+            transition: box-shadow .22s var(--ease-out), background-color .2s;
+        }
+        .input:focus-within { box-shadow: 0 0 0 3.5px var(--field-focus); }
+        .input input, .input textarea { color: var(--text); }
+        .input input::placeholder, .input textarea::placeholder { color: var(--text-3); }
+
+        .nav-item { color: var(--text-2); transition: background-color .18s var(--ease-out), color .18s, transform .15s; }
+        .nav-item:hover { background: var(--field); color: var(--text); }
+        .nav-item:active { transform: scale(.98); }
+        .nav-item.active {
+            color: var(--text);
+            background: linear-gradient(90deg, color-mix(in srgb, var(--accent1) 18%, transparent), color-mix(in srgb, var(--accent2) 14%, transparent));
+        }
+
+        .seg-btn { color: var(--text-2); transition: all .2s var(--ease-out); }
+        .seg-btn:hover { color: var(--text); }
+        .seg-btn.active {
+            color: var(--text);
+            background: var(--panel-strong);
+            box-shadow: 0 2px 10px -2px rgba(0, 0, 0, .18);
+        }
+
+        .progress-track { background: var(--field); }
+        .progress-fill {
+            background: linear-gradient(90deg, var(--accent1), var(--accent2));
+            transition: width .6s var(--ease-spring);
+        }
+        .progress-indeterminate { position: relative; overflow: hidden; background: var(--field); }
+        .progress-indeterminate::after {
+            content: ''; position: absolute; inset: 0; width: 40%; border-radius: 9999px;
+            background: linear-gradient(90deg, var(--accent1), var(--accent2));
+            animation: indeterminate 1.15s var(--ease-spring) infinite;
+        }
+        @keyframes indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+
+        /* ============ 红绿灯（实际控制窗口） ============ */
+        .tl {
+            width: 12px; height: 12px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
+            position: relative; box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .18);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 9px; font-weight: 700; line-height: 1; color: rgba(0, 0, 0, .5);
+            transition: transform .15s var(--ease-out);
+        }
+        .tl span { opacity: 0; transition: opacity .15s; pointer-events: none; }
+        .tl-group:hover .tl span { opacity: 1; }
+        .tl:active { transform: scale(.88); }
+
+        /* ============ 动画 ============ */
+        .view-anim { animation: viewIn .38s var(--ease-spring) both; }
+        @keyframes viewIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+        .card-in { animation: cardIn .5s var(--ease-spring) both; animation-delay: var(--d, 0ms); }
+        @keyframes cardIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+        .toast { animation: toastIn .4s var(--ease-spring) both; }
+        .toast-leaving { animation: toastOut .3s ease-in both; }
+        @keyframes toastIn { from { opacity: 0; transform: translateY(-14px) scale(.95); } to { opacity: 1; transform: none; } }
+        @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-10px) scale(.96); } }
+
+        .pulse-dot { animation: pulseDot 2s ease-in-out infinite; }
+        @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+        /* ============ 滚动条 ============ */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: rgba(128, 128, 140, .3); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 140, .5); }
+        ::-webkit-scrollbar-track { background: transparent; }
+
+        ::selection { background: color-mix(in srgb, var(--accent2) 32%, transparent); }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+        }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen" x-data="app()">
-    <div class="max-w-4xl mx-auto px-4 py-8">
-        <!-- 头部 -->
-        <header class="mb-8">
-            <h1 class="text-3xl font-bold text-primary-700">LOFTER 文章下载器</h1>
-            <p class="text-gray-500 mt-1">下载网易 LOFTER 文章，支持 Markdown / TXT / PDF 格式</p>
+<body class="h-screen overflow-hidden font-sans" x-data="app()">
+
+    <!-- 极光氛围 -->
+    <div class="aurora"><span class="a1"></span><span class="a2"></span><span class="a3"></span></div>
+
+    <!-- Toast -->
+    <div class="fixed top-14 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none">
+        <template x-for="t in toasts" :key="t.id">
+            <div class="toast pointer-events-auto flex items-center gap-2 pl-3 pr-4 py-2 rounded-full text-sm font-medium panel"
+                 :class="{ 'toast-leaving': t.leaving, '!bg-[#34c759]/90 !border-transparent text-white': t.type === 'success', '!bg-[#ff3b30]/90 !border-transparent text-white': t.type === 'error' }">
+                <svg x-show="t.type === 'success'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                <svg x-show="t.type === 'error'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+                <span x-text="t.message"></span>
+            </div>
+        </template>
+    </div>
+
+    <div class="relative z-10 h-full flex flex-col">
+
+        <!-- ============ 标题栏（可拖动，红绿灯实际控制窗口） ============ -->
+        <header class="pywebview-drag-region h-12 shrink-0 flex items-center gap-3 px-4 select-none"
+                style="border-bottom: 1px solid var(--line)">
+            <!-- 红绿灯（仅桌面 App 模式显示） -->
+            <div x-show="isApp" class="tl-group flex items-center gap-2">
+                <button class="tl bg-[#ff5f57]" @click="closeWindow()" title="关闭"><span>×</span></button>
+                <button class="tl bg-[#febc2e]" @click="minimizeWindow()" title="最小化"><span>–</span></button>
+                <button class="tl bg-[#28c840]" @click="toggleMaximize()" title="最大化 / 还原"><span x-text="maximized ? '⤡' : '+'" style="font-size:8px"></span></button>
+            </div>
+
+            <!-- 品牌标识 -->
+            <div class="flex items-center gap-2.5">
+                <div class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center shadow-md"
+                     style="background: linear-gradient(135deg, var(--accent1), var(--accent2)); box-shadow: 0 3px 10px -2px var(--glow)">
+                    <span class="font-display font-bold text-white text-[13px] leading-none" style="margin-top:-1px">L</span>
+                </div>
+                <span class="font-display font-semibold text-[15px] tracking-wide">LOFTER 下载器</span>
+                <span class="caption hidden sm:inline" style="margin-top:2px">Archiver</span>
+            </div>
+
+            <!-- 状态（右侧） -->
+            <div class="ml-auto flex items-center gap-1.5 text-[11px] t3">
+                <span class="w-1.5 h-1.5 rounded-full" :class="loggedIn ? 'bg-[#30d158]' : 'bg-gray-400/50'"></span>
+                <span x-text="loggedIn ? '已登录' : '未登录'"></span>
+            </div>
+
+            <!-- 关闭按钮（桌面 App 模式） -->
+            <button x-show="isApp" @click="closeWindow()"
+                    class="ml-3 w-7 h-7 rounded-lg flex items-center justify-center text-[15px] leading-none t2 hover:bg-[#ff3b30]/12 hover:text-[#ff3b30] dark:hover:text-[#ff453a] transition-all active:scale-95"
+                    title="关闭">
+                ×
+            </button>
         </header>
 
-        <!-- LOFTER 全站登录提示 -->
-        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-3">
-            <span class="text-amber-600 text-lg">⚠️</span>
-            <div>
-                <p class="text-amber-800 font-medium">LOFTER 要求全站登录</p>
-                <p class="text-amber-600 text-sm mt-1">所有下载均需先登录 LOFTER 账号（含拼图验证码），登录一次后自动保持</p>
+        <!-- ============ 主体 ============ -->
+        <div class="flex flex-1 min-h-0">
+
+            <!-- 侧栏 -->
+            <aside class="w-56 shrink-0 flex flex-col" style="border-right: 1px solid var(--line)">
+                <!-- 登录卡片 -->
+                <div class="p-3">
+                    <div class="panel rounded-2xl p-3">
+                        <div class="flex items-center gap-2.5">
+                            <div class="relative w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-sm font-bold text-white"
+                                 style="background: linear-gradient(135deg, var(--accent1), var(--accent2))">
+                                <span x-text="loggedIn && userName ? userName[0].toUpperCase() : '?'"></span>
+                                <span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full"
+                                      style="box-shadow: 0 0 0 2px var(--bg)"
+                                      :class="loggedIn ? 'bg-[#30d158]' : 'bg-gray-400/60'"></span>
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-[13px] font-semibold truncate" x-text="loggedIn ? (userName || 'LOFTER 用户') : '未登录'"></p>
+                                <p class="text-[11px] t3 truncate" x-text="loggedIn ? '会话有效' : '登录后可下载'"></p>
+                            </div>
+                        </div>
+                        <template x-if="!loggedIn">
+                            <div class="mt-2.5 space-y-1.5">
+                                <button @click="startLogin()" :disabled="loginLoading"
+                                        class="btn-primary w-full py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                    <svg x-show="loginLoading" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+                                    <span x-text="loginLoading ? '处理中…' : (loginStarted ? '检查登录' : '登录 LOFTER')"></span>
+                                </button>
+                                <p x-show="loginMessage" class="text-[11px] leading-snug"
+                                   :class="loginOk === false ? 'text-[#ff453a]' : 't3'"
+                                   x-text="loginMessage"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- 导航 -->
+                <nav class="px-3 space-y-0.5">
+                    <p class="caption px-2 pb-1.5">Menu</p>
+                    <button @click="view = 'download'" class="nav-item w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium" :class="{ active: view === 'download' }">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+                        下载
+                    </button>
+                    <button @click="view = 'tasks'" class="nav-item w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium" :class="{ active: view === 'tasks' }">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10"/></svg>
+                        任务
+                        <span x-show="activeTasks.length > 0" class="btn-primary ml-auto min-w-[18px] h-[18px] px-1 rounded-full text-white text-[10px] font-bold flex items-center justify-center" x-text="activeTasks.length"></span>
+                    </button>
+                    <button @click="view = 'settings'" class="nav-item w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium" :class="{ active: view === 'settings' }">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        设置
+                    </button>
+                </nav>
+
+                <div class="mt-auto p-4">
+                    <p class="font-display text-[11px] t3 leading-relaxed">以艺术之名，<br>收藏每一份热爱。</p>
+                </div>
+            </aside>
+
+            <!-- 内容区 -->
+            <main class="flex-1 min-w-0 overflow-y-auto">
+
+                <!-- ============ 下载 ============ -->
+                <div x-show="view === 'download'" class="view-anim p-6 sm:p-9 space-y-5 max-w-2xl mx-auto">
+                    <div class="card-in" style="--d: 0ms">
+                        <p class="caption mb-1.5">Archive your favorites</p>
+                        <h1 class="font-display text-[30px] font-bold tracking-wide">下载</h1>
+                        <p class="text-[13px] t2 mt-1">将 LOFTER 文章保存为 Markdown、TXT、PDF 或 EPUB</p>
+                    </div>
+
+                    <!-- 未登录横幅 -->
+                    <div x-show="!loggedIn" class="card-in panel rounded-2xl p-4 flex items-center gap-3" style="--d: 60ms; border-color: rgba(255,159,10,.3)">
+                        <div class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-[#ff9f0a] to-[#ff6b0a] flex items-center justify-center shadow-md shadow-orange-500/25">
+                            <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-[13px] font-semibold text-[#c26a00] dark:text-[#ffb340]">需要先登录 LOFTER</p>
+                            <p class="text-xs text-[#c26a00]/70 dark:text-[#ffb340]/70">所有下载均需有效登录会话（含拼图验证码）</p>
+                        </div>
+                        <button @click="startLogin()" :disabled="loginLoading"
+                                class="shrink-0 px-3.5 py-1.5 rounded-lg bg-[#ff9f0a] text-white text-xs font-semibold disabled:opacity-50 transition-transform active:scale-95">
+                            去登录
+                        </button>
+                    </div>
+
+                    <!-- 单篇文章 -->
+                    <section class="card-in panel rounded-2xl p-5" style="--d: 120ms">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-9 h-9 rounded-[10px] bg-gradient-to-br from-[#38bdf8] to-[#6366f1] flex items-center justify-center shadow-md shadow-indigo-500/25">
+                                <svg class="w-[18px] h-[18px] text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                            </div>
+                            <div>
+                                <h2 class="text-[15px] font-semibold">单篇文章</h2>
+                                <p class="text-xs t3">粘贴文章链接，立即下载</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-2.5">
+                            <div class="input flex-1 flex items-center rounded-xl">
+                                <input type="url" x-model="singleUrl" @keydown.enter="downloadSingle()"
+                                       placeholder="https://xxx.lofter.com/post/…"
+                                       class="w-full px-3.5 py-2.5 bg-transparent outline-none text-sm">
+                            </div>
+                            <button @click="downloadSingle()" :disabled="!singleUrl || submitting"
+                                    class="btn-primary px-5 py-2.5 rounded-xl text-sm font-semibold">
+                                下载
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- 作者全部 -->
+                    <section class="card-in panel rounded-2xl p-5" style="--d: 180ms">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-9 h-9 rounded-[10px] bg-gradient-to-br from-[#c084fc] to-[#f472b6] flex items-center justify-center shadow-md shadow-pink-500/25">
+                                <svg class="w-[18px] h-[18px] text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                            </div>
+                            <div>
+                                <h2 class="text-[15px] font-semibold">作者全部文章</h2>
+                                <p class="text-xs t3">输入作者数字 ID，批量下载其全部作品</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-2.5">
+                            <div class="input flex-1 flex items-center rounded-xl">
+                                <input type="text" inputmode="numeric" x-model="userId" @keydown.enter="downloadBlog()"
+                                       placeholder="作者数字 ID（如 12345678）"
+                                       class="w-full px-3.5 py-2.5 bg-transparent outline-none text-sm">
+                            </div>
+                            <button @click="listBlog()" :disabled="!userId || submitting"
+                                    class="btn-ghost px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap">
+                                选择文章
+                            </button>
+                            <button @click="downloadBlog()" :disabled="!userId || submitting"
+                                    class="btn-primary px-5 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap">
+                                下载全部
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- 喜欢文章 -->
+                    <section class="card-in panel rounded-2xl p-5" style="--d: 240ms">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 rounded-[10px] bg-gradient-to-br from-[#fb7185] to-[#f59e0b] flex items-center justify-center shadow-md shadow-rose-500/25">
+                                <svg class="w-[18px] h-[18px] text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <h2 class="text-[15px] font-semibold">喜欢文章</h2>
+                                <p class="text-xs t3" x-text="loggedIn ? '下载你标记过喜欢的全部文章' : '需要先登录 LOFTER 账号'"></p>
+                            </div>
+                            <button @click="downloadLikes()" :disabled="submitting || !loggedIn"
+                                    class="shrink-0 px-5 py-2.5 rounded-xl text-sm font-semibold"
+                                    :class="loggedIn ? 'btn-primary' : 'btn-ghost'">
+                                下载喜欢
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- AO3 -->
+                    <section class="card-in panel rounded-2xl p-5" style="--d: 300ms">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-9 h-9 rounded-[10px] bg-gradient-to-br from-[#8b5cf6] to-[#ec4899] flex items-center justify-center shadow-md shadow-fuchsia-500/25">
+                                <span class="font-display font-bold text-white text-[13px]">A</span>
+                            </div>
+                            <div>
+                                <h2 class="text-[15px] font-semibold">AO3</h2>
+                                <p class="text-xs t3">支持单篇、系列、作者、批量链接</p>
+                            </div>
+                        </div>
+
+                        <!-- 自动识别结果（随输入实时更新） -->
+                        <div class="flex items-center gap-2 mb-3">
+                            <span class="text-[11px] t3">自动识别</span>
+                            <span class="px-2 py-0.5 rounded-md text-[11px] font-semibold"
+                                  style="background: linear-gradient(90deg, color-mix(in srgb, var(--accent1) 16%, transparent), color-mix(in srgb, var(--accent2) 12%, transparent))"
+                                  x-text="ao3KindLabel"></span>
+                        </div>
+
+                        <!-- 来源与格式 -->
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="input flex rounded-lg p-0.5 gap-0.5">
+                                <button @click="ao3Source = 'official'"
+                                        class="px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
+                                        :class="ao3Source === 'official' ? 'bg-white/80 dark:bg-white/15 shadow-sm text-[var(--text)]' : 't2'"
+                                        title="使用 AO3 官方导出，排版最准确">官方</button>
+                                <button @click="ao3Source = 'parsed'"
+                                        class="px-2.5 py-1 rounded-md text-xs font-medium transition-colors"
+                                        :class="ao3Source === 'parsed' ? 'bg-white/80 dark:bg-white/15 shadow-sm text-[var(--text)]' : 't2'"
+                                        title="统一解析为 Markdown/TXT/PDF/EPUB">解析</button>
+                            </div>
+                            <select x-model="ao3Format"
+                                    class="input text-xs rounded-lg px-2 py-1.5 bg-transparent outline-none">
+                                <template x-for="opt in ao3FormatOptions" :key="opt.value">
+                                    <option :value="opt.value" x-text="opt.label"></option>
+                                </template>
+                            </select>
+                        </div>
+
+                        <!-- 输入框 -->
+                        <div class="flex gap-2.5 items-end">
+                            <div class="input flex-1 rounded-xl">
+                                <textarea x-model="ao3Input" rows="1"
+                                          @input="ao3Kind = detectAo3Kind($event.target.value); growAo3($event.target)"
+                                          placeholder="支持单篇 / 系列 / 作者链接，或每行一个批量链接…"
+                                          class="block w-full px-3.5 py-2.5 bg-transparent outline-none text-sm leading-6 resize-none"></textarea>
+                            </div>
+                            <button x-show="ao3Kind !== 'single'" @click="listAo3()" :disabled="!ao3Input || submitting"
+                                    class="btn-ghost px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap">
+                                选择文章
+                            </button>
+                            <button @click="downloadAo3()" :disabled="!ao3Input || submitting"
+                                    class="btn-primary px-5 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap">
+                                <span x-text="ao3Kind === 'single' ? '下载' : '下载全部'"></span>
+                            </button>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- ============ 任务 ============ -->
+                <div x-show="view === 'tasks'" class="view-anim p-6 sm:p-9 space-y-5 max-w-2xl mx-auto">
+                    <div class="card-in" style="--d: 0ms">
+                        <p class="caption mb-1.5">Tasks &amp; history</p>
+                        <h1 class="font-display text-[30px] font-bold tracking-wide">任务</h1>
+                        <p class="text-[13px] t2 mt-1">查看下载进度与历史记录</p>
+                    </div>
+
+                    <!-- 进行中 -->
+                    <section class="card-in" style="--d: 60ms">
+                        <p class="caption px-1 pb-2">In progress</p>
+                        <div x-show="activeTasks.length === 0" class="panel rounded-2xl py-10 flex flex-col items-center gap-2.5 t3">
+                            <svg class="w-8 h-8 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
+                            <p class="font-display text-sm">暂无进行中的任务</p>
+                        </div>
+                        <div class="space-y-3">
+                            <template x-for="task in activeTasks" :key="task.task_id">
+                                <div class="panel rounded-2xl p-4">
+                                    <div class="flex items-center justify-between mb-2.5">
+                                        <div class="flex items-center gap-2 min-w-0">
+                                            <span class="w-2 h-2 shrink-0 rounded-full pulse-dot" style="background: linear-gradient(135deg, var(--accent1), var(--accent2))"></span>
+                                            <span class="text-sm font-semibold shrink-0" x-text="typeLabel(task.type)"></span>
+                                            <span class="text-[13px] t3 truncate" x-text="task.message"></span>
+                                        </div>
+                                        <button @click="cancelTask(task.task_id)"
+                                                class="shrink-0 ml-3 px-3 py-1 rounded-lg bg-[#ff3b30]/12 text-[#ff3b30] dark:text-[#ff453a] text-xs font-semibold hover:bg-[#ff3b30]/22 transition-all active:scale-95">
+                                            取消
+                                        </button>
+                                    </div>
+                                    <div class="progress-track w-full h-1.5 rounded-full overflow-hidden">
+                                        <div class="h-full rounded-full"
+                                             :class="task.total > 0 ? 'progress-fill' : 'progress-indeterminate'"
+                                             :style="task.total > 0 ? 'width:' + Math.round(task.progress * 100) + '%' : ''"></div>
+                                    </div>
+                                    <div class="flex justify-between text-[11px] t3 mt-1.5">
+                                        <span x-text="task.total > 0 ? Math.round(task.progress * 100) + '%' : '准备中…'"></span>
+                                        <span x-text="task.total > 0 ? task.current + ' / ' + task.total : ''"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </section>
+
+                    <!-- 历史 -->
+                    <section class="card-in" style="--d: 120ms">
+                        <p class="caption px-1 pb-2">History</p>
+                        <div x-show="finishedTasks.length === 0" class="panel rounded-2xl py-8 text-center font-display text-sm t3">
+                            暂无历史记录
+                        </div>
+                        <div class="panel rounded-2xl overflow-hidden" style="--pad: 0">
+                            <template x-for="task in finishedTasks" :key="task.task_id">
+                                <div class="px-4 py-3" style="border-bottom: 1px solid var(--line)">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-7 h-7 shrink-0 rounded-full flex items-center justify-center"
+                                             :class="{
+                                                'bg-[#34c759]/15 text-[#248a3d] dark:text-[#30d158]': task.status === 'completed',
+                                                'bg-[#ff3b30]/15 text-[#d70015] dark:text-[#ff453a]': task.status === 'failed',
+                                                'bg-[#ff9f0a]/15 text-[#b25f00] dark:text-[#ffb340]': task.status === 'canceled'
+                                             }">
+                                            <svg x-show="task.status === 'completed'" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                                            <svg x-show="task.status === 'failed'" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                                            <svg x-show="task.status === 'canceled'" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                                        </div>
+                                        <div class="flex-1 min-w-0">
+                                            <p class="text-[13px] font-medium truncate">
+                                                <span x-text="typeLabel(task.type)"></span>
+                                                <span class="t3 font-normal" x-text="task.error || task.message || (task.total > 0 ? task.current + '/' + task.total : '')"></span>
+                                            </p>
+                                            <p x-show="task.result?.saved_path" class="text-[11px] t3 truncate mt-0.5" x-text="task.result.saved_path"></p>
+                                        </div>
+                                        <span class="shrink-0 text-[11px] t3" x-text="formatTime(task.created_at)"></span>
+                                    </div>
+                                    <div x-show="task.status === 'completed' && task.result?.saved_path" class="flex justify-end mt-2">
+                                        <button @click="openTaskFolder(task)"
+                                                class="px-3 py-1.5 rounded-lg text-xs font-semibold btn-ghost flex items-center gap-1.5">
+                                            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 002 2z"/></svg>
+                                            <span x-text="isApp ? '打开文件夹' : '复制路径'"></span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- ============ 设置 ============ -->
+                <div x-show="view === 'settings'" class="view-anim p-6 sm:p-9 space-y-5 max-w-2xl mx-auto">
+                    <div class="card-in" style="--d: 0ms">
+                        <p class="caption mb-1.5">Preferences</p>
+                        <h1 class="font-display text-[30px] font-bold tracking-wide">设置</h1>
+                        <p class="text-[13px] t2 mt-1">输出格式与存储位置</p>
+                    </div>
+
+                    <!-- 输出格式 -->
+                    <section class="card-in panel rounded-2xl p-5" style="--d: 60ms">
+                        <h2 class="text-[15px] font-semibold mb-1">输出格式</h2>
+                        <p class="text-xs t3 mb-4">Markdown 为文件夹（含图片），其余为单文件</p>
+                        <div class="input flex rounded-xl p-1 gap-1">
+                            <template x-for="opt in formatOptions" :key="opt.value">
+                                <button @click="outputFormat = opt.value; saveSettings()"
+                                        class="seg-btn flex-1 py-1.5 rounded-lg text-[13px] font-medium"
+                                        :class="{ active: outputFormat === opt.value }"
+                                        x-text="opt.label"></button>
+                            </template>
+                        </div>
+                    </section>
+
+                    <!-- 存储位置 -->
+                    <section class="card-in panel rounded-2xl p-5 space-y-4" style="--d: 120ms">
+                        <div>
+                            <h2 class="text-[15px] font-semibold mb-1">下载目录</h2>
+                            <p class="text-xs t3 mb-3">可输入完整路径或子目录名，留空使用默认下载目录；桌面 App 可点击「浏览」选择文件夹</p>
+                            <div class="flex gap-2.5">
+                                <div class="input flex-1 flex items-center rounded-xl">
+                                    <input type="text" x-model="downloadDir" @input="saveSettings()"
+                                           placeholder="留空使用默认下载目录"
+                                           class="w-full px-3.5 py-2.5 bg-transparent outline-none text-sm">
+                                </div>
+                                <button @click="browseDownloadDir()" x-show="isApp"
+                                        class="btn-ghost px-4 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap">
+                                    浏览…
+                                </button>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between pt-3" style="border-top: 1px solid var(--line)">
+                            <span class="text-[13px] t2">默认下载目录</span>
+                            <code class="input text-xs px-2 py-1 rounded-md t2" x-text="defaultDir"></code>
+                        </div>
+                    </section>
+
+                    <!-- 账号 -->
+                    <section class="card-in panel rounded-2xl p-5" style="--d: 180ms">
+                        <h2 class="text-[15px] font-semibold mb-3">账号</h2>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2.5">
+                                <span class="w-2 h-2 rounded-full" :class="loggedIn ? 'bg-[#30d158]' : 'bg-gray-400/50'"></span>
+                                <span class="text-[13px] t2" x-text="loggedIn ? '已登录' + (userName ? ': @' + userName : '') : '未登录'"></span>
+                            </div>
+                            <button x-show="loggedIn" @click="clearLogin()"
+                                    class="px-3.5 py-1.5 rounded-lg bg-[#ff3b30]/12 text-[#ff3b30] dark:text-[#ff453a] text-xs font-semibold hover:bg-[#ff3b30]/22 transition-all active:scale-95">
+                                清除登录
+                            </button>
+                        </div>
+                    </section>
+
+                    <p class="card-in text-center font-display text-[11px] t3 pt-2" style="--d: 240ms">LOFTER 下载器 · Markdown / TXT / PDF / EPUB</p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- 文章选择面板 -->
+    <div x-show="selectionPanelOpen"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         class="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8"
+         style="background: rgba(0, 0, 0, .35)">
+        <div @click.away="closeSelectionPanel()"
+             x-show="selectionPanelOpen"
+             x-transition:enter="transition ease-out duration-300"
+             x-transition:enter-start="opacity-0 scale-95 translate-y-4"
+             x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+             x-transition:leave="transition ease-in duration-200"
+             x-transition:leave-start="opacity-100 scale-100 translate-y-0"
+             x-transition:leave-end="opacity-0 scale-95 translate-y-4"
+             class="panel w-full max-w-2xl max-h-[80vh] rounded-3xl flex flex-col overflow-hidden shadow-2xl"
+             style="box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .5)">
+            <!-- 头部 -->
+            <div class="p-5 shrink-0" style="border-bottom: 1px solid var(--line)">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <h2 class="font-display text-xl font-bold truncate">选择文章</h2>
+                        <p class="text-xs t3 mt-0.5 truncate" x-text="selectionBlogName || '文章列表'"></p>
+                    </div>
+                    <button @click="closeSelectionPanel()"
+                            class="btn-ghost w-8 h-8 rounded-full flex items-center justify-center text-lg leading-none shrink-0">
+                        ×
+                    </button>
+                </div>
+                <!-- 搜索 + 全选 -->
+                <div class="flex gap-2 mt-3">
+                    <div class="input flex-1 flex items-center rounded-xl">
+                        <input type="text" x-model="selectionSearch" placeholder="搜索标题…"
+                               class="w-full px-3 py-2 bg-transparent outline-none text-sm">
+                    </div>
+                    <button @click="selectAllFiltered()"
+                            class="btn-ghost px-3 py-2 rounded-lg text-xs font-medium shrink-0">全选</button>
+                    <button @click="unselectAllFiltered()"
+                            class="btn-ghost px-3 py-2 rounded-lg text-xs font-medium shrink-0">全不选</button>
+                </div>
+            </div>
+            <!-- 列表 -->
+            <div class="flex-1 overflow-y-auto p-3 space-y-1">
+                <template x-for="item in filteredSelectionItems" :key="item.url">
+                    <label class="flex items-center gap-3 p-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer transition-colors">
+                        <input type="checkbox"
+                               :checked="selectionSelected[item.url]"
+                               @change="toggleSelection(item.url)"
+                               class="w-4 h-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500 shrink-0">
+                        <span class="text-sm truncate min-w-0" x-text="item.title || item.url"></span>
+                    </label>
+                </template>
+                <div x-show="filteredSelectionItems.length === 0" class="text-center py-10 t3 text-sm">
+                    无匹配文章
+                </div>
+            </div>
+            <!-- 底部 -->
+            <div class="p-5 shrink-0 flex items-center justify-between" style="border-top: 1px solid var(--line)">
+                <span class="text-sm t2">已选 <span x-text="selectedCount" class="font-semibold" style="color: var(--accent1)"></span> 篇</span>
+                <button @click="downloadSelected()" :disabled="selectedCount === 0"
+                        class="btn-primary px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50">
+                    下载选中 (<span x-text="selectedCount"></span>)
+                </button>
             </div>
         </div>
-
-        <!-- 登录区域 -->
-        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">🔑 登录</h2>
-            <div x-show="!loggedIn" class="space-y-3">
-                <p class="text-sm text-gray-600">点击下方按钮启动浏览器窗口，在浏览器中手动登录 LOFTER（需完成拼图验证码），完成后点击「检查登录」。</p>
-                <div class="flex gap-3">
-                    <button @click="startLogin()" :disabled="loginLoading"
-                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 font-medium">
-                        🚀 启动浏览器登录
-                    </button>
-                    <button @click="checkLoginStatus()" :disabled="loginLoading"
-                        class="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium">
-                        ✅ 检查登录
-                    </button>
-                </div>
-                <p x-show="loginMessage" class="text-sm" :class="loginMessageClass" x-text="loginMessage"></p>
-            </div>
-            <div x-show="loggedIn" class="space-y-3">
-                <div class="flex items-center gap-3">
-                    <span class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-primary-100 text-primary-700 font-bold text-lg"
-                        x-text="userName ? userName[0].toUpperCase() : '?'"></span>
-                    <div>
-                        <p class="text-green-700 font-medium text-sm" x-text="userName ? '已登录: @' + userName : '✅ 登录会话有效'"></p>
-                        <p class="text-gray-500 text-xs">可正常使用所有下载功能</p>
-                    </div>
-                </div>
-                <button @click="clearLogin()"
-                    class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 font-medium text-sm">
-                    清除登录
-                </button>
-            </div>
-        </section>
-
-        <!-- 下载设置 -->
-        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">⚙️ 下载设置</h2>
-            <div class="space-y-3">
-                <div class="flex items-center gap-3">
-                    <span class="text-gray-700 w-24 shrink-0 text-sm">子目录名</span>
-                    <input type="text" x-model="downloadDir" placeholder="留空使用默认下载目录"
-                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition text-sm">
-                </div>
-                <p class="text-xs text-gray-400 ml-[108px]">
-                    填入子目录名（非完整路径），如 «我的博客»，留空则使用默认下载目录
-                </p>
-                <div class="flex items-center gap-3">
-                    <span class="text-gray-700 w-24 shrink-0 text-sm">输出格式</span>
-                    <div class="flex gap-2">
-                        <label class="flex items-center gap-1 cursor-pointer">
-                            <input type="radio" x-model="outputFormat" value="md" class="text-primary-600">
-                            <span class="text-sm text-gray-700">Markdown</span>
-                        </label>
-                        <label class="flex items-center gap-1 cursor-pointer">
-                            <input type="radio" x-model="outputFormat" value="txt" class="text-primary-600">
-                            <span class="text-sm text-gray-700">TXT</span>
-                        </label>
-                        <label class="flex items-center gap-1 cursor-pointer">
-                            <input type="radio" x-model="outputFormat" value="pdf" class="text-primary-600">
-                            <span class="text-sm text-gray-700">PDF</span>
-                        </label>
-                        <label class="flex items-center gap-1 cursor-pointer">
-                            <input type="radio" x-model="outputFormat" value="epub" class="text-primary-600">
-                            <span class="text-sm text-gray-700">EPUB</span>
-                        </label>
-                    </div>
-                </div>
-                <p class="text-xs text-gray-400">
-                    Markdown 为文件夹形式（含图片），TXT / PDF / EPUB 为单文件
-                </p>
-            </div>
-        </section>
-
-        <!-- 单篇文章 -->
-        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">📄 单篇文章下载</h2>
-            <div class="flex gap-3">
-                <input type="url" x-model="singleUrl" placeholder="粘贴 LOFTER 文章链接..."
-                    class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                <button @click="downloadSingle()" :disabled="!singleUrl || loading"
-                    class="px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium">
-                    下载
-                </button>
-            </div>
-        </section>
-
-        <!-- 批量下载 -->
-        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">📋 批量下载</h2>
-            <div class="space-y-4">
-                <div class="flex items-center gap-3">
-                    <span class="text-gray-700 w-24 shrink-0">作者数字 ID</span>
-                    <input type="text" inputmode="numeric" x-model="userId" placeholder="输入作者数字 ID（如 12345678）"
-                        class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition">
-                    <button @click="downloadBlog()" :disabled="!userId || loading"
-                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium whitespace-nowrap">
-                        下载全部
-                    </button>
-                </div>
-
-                <div class="flex items-center gap-3 pt-2 border-t border-gray-100">
-                    <span class="text-gray-700 w-24 shrink-0">喜欢文章 ❤️</span>
-                    <span x-show="!loggedIn" class="text-sm text-amber-600">需先登录</span>
-                    <button @click="downloadLikes()" :disabled="loading || !loggedIn"
-                        class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition font-medium ml-auto">
-                        下载喜欢
-                    </button>
-                </div>
-            </div>
-        </section>
-
-        <!-- 下载任务 -->
-        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">📊 下载任务</h2>
-            <div x-show="tasks.length === 0" class="text-gray-400 text-center py-8">
-                暂无下载任务
-            </div>
-            <div class="space-y-3">
-                <template x-for="task in tasks" :key="task.task_id">
-                    <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition">
-                        <div class="flex items-center justify-between mb-2">
-                            <div>
-                                <span class="font-medium text-gray-800" x-text="typeLabel(task.type)"></span>
-                                <span class="text-sm text-gray-500 ml-2" x-text="task.message"></span>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <span class="text-sm px-2 py-0.5 rounded" :class="statusClass(task.status)" x-text="statusText(task.status)"></span>
-                                <button @click="cancelTask(task.task_id)" x-show="task.status === 'running'" class="text-red-500 hover:text-red-700 text-sm">取消</button>
-                            </div>
-                        </div>
-                        <div class="w-full bg-gray-200 rounded-full h-2">
-                            <div class="bg-primary-600 h-2 rounded-full transition-all duration-500" :style="'width: ' + Math.round(task.progress * 100) + '%'"></div>
-                        </div>
-                        <div class="flex justify-between text-xs text-gray-400 mt-1">
-                            <span x-text="Math.round(task.progress * 100) + '%'"></span>
-                            <span x-text="task.current ? task.current + '/' + task.total : ''"></span>
-                        </div>
-                        <p x-show="task.error" class="text-xs text-red-500 mt-1" x-text="task.error"></p>
-                    </div>
-                </template>
-            </div>
-        </section>
-
-        <!-- 已完成 -->
-        <section class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-4">📁 已完成</h2>
-            <div x-show="completedTasks.length === 0" class="text-gray-400 text-center py-8">
-                暂无已完成任务
-            </div>
-            <div class="space-y-2">
-                <template x-for="task in completedTasks" :key="task.task_id">
-                    <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-                        <div class="flex items-center gap-2">
-                            <span class="text-sm font-medium text-gray-700" x-text="typeLabel(task.type)"></span>
-                            <span :class="task.status === 'failed' ? 'text-red-500' : 'text-green-700'" x-text="task.status === 'failed' ? '❌' : '✅'"></span>
-                            <span class="text-sm text-gray-500" x-text="task.error || task.message || (task.current + '/' + task.total)"></span>
-                        </div>
-                        <span class="text-xs text-gray-400" x-text="formatTime(task.created_at)"></span>
-                    </div>
-                </template>
-            </div>
-        </section>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <script>
         function app() {
             return {
+                // --- 桌面 App 窗口控制 ---
+                isApp: false,
+                maximized: false,
+
+                // --- 视图 ---
+                view: 'download',
+
+                // --- 下载表单 ---
                 singleUrl: '',
                 userId: '',
                 outputFormat: 'md',
                 downloadDir: '',
                 defaultDir: '~/lofter_downloads',
-                loginMessage: '',
-                _loginOk: null,
+                formatOptions: [
+                    { value: 'md', label: 'Markdown' },
+                    { value: 'txt', label: 'TXT' },
+                    { value: 'pdf', label: 'PDF' },
+                    { value: 'epub', label: 'EPUB' },
+                ],
+                submitting: false,
+
+                // --- 登录 ---
                 loggedIn: false,
                 userName: '',
                 loginLoading: false,
-                loading: false,
-                tasks: [],
-                pollId: null,
+                loginStarted: false,
+                loginMessage: '',
+                loginOk: null,
 
-                get completedTasks() {
-                    return this.tasks.filter(t => ['completed', 'failed', 'canceled'].includes(t.status));
+                // --- 任务 ---
+                tasks: [],
+                _pollLoginStart: false,
+
+                // --- 选择面板 ---
+                selectionPanelOpen: false,
+                selectionItems: [],
+                selectionSelected: {},
+                selectionSearch: '',
+                selectionBlogName: '',
+                selectionKind: 'blog',
+                selectionTaskId: '',
+
+                // --- AO3 ---
+                ao3Input: '',
+                ao3Kind: 'single',
+                ao3Source: 'official',
+                ao3Format: 'epub',
+
+                // --- Toast ---
+                toasts: [],
+                _toastSeq: 0,
+
+                get activeTasks() {
+                    // 清单任务（list_*）仅供选择面板内部轮询，不在任务列表展示
+                    return this.tasks.filter(t => ['pending', 'running'].includes(t.status) && !String(t.type).startsWith('list_'));
                 },
 
-                get loginMessageClass() {
-                    if (this._loginOk === true) return 'text-green-600';
-                    if (this._loginOk === false) return 'text-red-500';
-                    return 'text-blue-600';
+                get finishedTasks() {
+                    return this.tasks.filter(t => ['completed', 'failed', 'canceled'].includes(t.status) && !String(t.type).startsWith('list_'));
+                },
+
+                get filteredSelectionItems() {
+                    if (!this.selectionSearch) return this.selectionItems;
+                    const q = this.selectionSearch.toLowerCase();
+                    return this.selectionItems.filter(i => (i.title || i.url).toLowerCase().includes(q));
+                },
+
+                get selectedCount() {
+                    return Object.values(this.selectionSelected).filter(Boolean).length;
+                },
+
+                get ao3KindLabel() {
+                    return { single: '单篇', series: '系列', author: '作者', batch: '批量' }[this.ao3Kind] || this.ao3Kind;
+                },
+
+                get ao3FormatOptions() {
+                    if (this.ao3Source === 'official') {
+                        return [
+                            { value: 'epub', label: 'EPUB' },
+                            { value: 'pdf', label: 'PDF' },
+                            { value: 'html', label: 'HTML' },
+                            { value: 'mobi', label: 'MOBI' },
+                            { value: 'azw3', label: 'AZW3' },
+                        ];
+                    }
+                    return [
+                        { value: 'md', label: 'Markdown' },
+                        { value: 'txt', label: 'TXT' },
+                        { value: 'pdf', label: 'PDF' },
+                        { value: 'epub', label: 'EPUB' },
+                    ];
                 },
 
                 init() {
+                    // 检测是否运行在桌面 App（pywebview）中
+                    if (window.pywebview) this.isApp = true;
+                    window.addEventListener('pywebviewready', () => { this.isApp = true; });
+
                     this.checkLogin();
                     this.loadTasks();
-                    this.pollId = setInterval(() => this.loadTasks(), 2000);
-                    // 恢复上次的下载设置
+                    setInterval(() => this.smartPoll(), 2000);
                     const savedFormat = localStorage.getItem('outputFormat');
                     if (savedFormat) this.outputFormat = savedFormat;
                     const savedDir = localStorage.getItem('downloadDir');
                     if (savedDir) this.downloadDir = savedDir;
+                },
+
+                // --- 窗口控制（无边框窗口的红绿灯） ---
+
+                closeWindow() { window.pywebview?.api?.close(); },
+                minimizeWindow() { window.pywebview?.api?.minimize(); },
+                toggleMaximize() {
+                    const api = window.pywebview?.api;
+                    if (!api) return;
+                    if (this.maximized) { api.restore(); } else { api.maximize(); }
+                    this.maximized = !this.maximized;
+                },
+
+                smartPoll() {
+                    this.loadTasks();
+                    if (this._pollLoginStart) this.checkLogin();
+                },
+
+                toast(message, type = 'info') {
+                    const id = ++this._toastSeq;
+                    this.toasts.push({ id, message, type, leaving: false });
+                    setTimeout(() => {
+                        const t = this.toasts.find(x => x.id === id);
+                        if (t) t.leaving = true;
+                        setTimeout(() => {
+                            this.toasts = this.toasts.filter(x => x.id !== id);
+                        }, 320);
+                    }, 3400);
+                },
+
+                saveSettings() {
+                    localStorage.setItem('outputFormat', this.outputFormat);
+                    localStorage.setItem('downloadDir', this.downloadDir);
+                },
+
+                async browseDownloadDir() {
+                    const api = window.pywebview?.api;
+                    if (!api?.select_folder) return;
+                    try {
+                        const folder = await api.select_folder();
+                        if (folder) {
+                            this.downloadDir = folder;
+                            this.saveSettings();
+                            this.toast('已选择下载目录：' + folder, 'info');
+                        }
+                    } catch (e) {
+                        this.toast('选择文件夹失败', 'error');
+                    }
+                },
+
+                openTaskFolder(task) {
+                    const path = task?.result?.saved_path;
+                    if (!path) return;
+                    if (window.pywebview?.api?.open_folder) {
+                        window.pywebview.api.open_folder(path);
+                    } else {
+                        navigator.clipboard.writeText(path)
+                            .then(() => this.toast('已复制下载路径：' + path, 'info'))
+                            .catch(() => this.toast(path, 'info'));
+                    }
                 },
 
                 // --- 登录 ---
@@ -238,48 +871,73 @@
                         const d = await r.json();
                         this.loggedIn = d.logged_in;
                         if (d.user_name) this.userName = d.user_name;
-                    } catch (e) { console.error(e); }
+                        if (this._pollLoginStart && d.login_ready) {
+                            this._pollLoginStart = false;
+                            this.loginStarted = true;
+                            this.loginMessage = '浏览器已打开，完成登录后回来点击「检查登录」';
+                            this.loginLoading = false;
+                        }
+                        if (this._pollLoginStart && d.login_start_error) {
+                            this._pollLoginStart = false;
+                            this.loginMessage = '启动失败: ' + d.login_start_error;
+                            this.loginOk = false;
+                            this.loginLoading = false;
+                        }
+                    } catch (e) { /* 忽略轮询错误 */ }
                 },
 
                 async startLogin() {
+                    // 已启动过登录浏览器 → 此按钮变为「检查登录」
+                    if (this.loginStarted) { return this.checkLoginStatus(); }
                     this.loginLoading = true;
                     this.loginMessage = '正在启动浏览器…';
-                    this._loginOk = null;
+                    this.loginOk = null;
                     try {
                         const r = await fetch('/api/login/start', { method: 'POST' });
                         const d = await r.json();
-                        if (d.ok) {
-                            this.loginMessage = d.message || '浏览器已打开，请完成登录后点击「检查登录」';
-                            this._loginOk = true;
+                        if (d.ok && d.status === 'starting') {
+                            this._pollLoginStart = true;
+                            this.loginMessage = '正在启动浏览器，请稍候…';
+                        } else if (d.ok) {
+                            this.loginStarted = true;
+                            this.loginMessage = d.message || '浏览器已打开，完成登录后点击「检查登录」';
+                            this.loginLoading = false;
                         } else {
                             this.loginMessage = '启动失败: ' + (d.error || '未知错误');
-                            this._loginOk = false;
+                            this.loginOk = false;
+                            this.loginLoading = false;
                         }
                     } catch (e) {
-                        this.loginMessage = '网络错误';
-                        this._loginOk = false;
-                    } finally { this.loginLoading = false; }
+                        this.loginMessage = '网络错误，请检查后端是否正常运行';
+                        this.loginOk = false;
+                        this.loginLoading = false;
+                    }
                 },
 
                 async checkLoginStatus() {
                     this.loginLoading = true;
                     this.loginMessage = '检查中…';
-                    this._loginOk = null;
+                    this.loginOk = null;
                     try {
                         const r = await fetch('/api/login/check', { method: 'POST' });
                         const d = await r.json();
                         if (d.logged_in) {
                             this.loggedIn = true;
                             if (d.user_name) this.userName = d.user_name;
-                            this.loginMessage = '登录成功！';
-                            this._loginOk = true;
+                            this.loginMessage = '';
+                            this.loginStarted = false;
+                            this.toast('登录成功' + (d.user_name ? '，欢迎 @' + d.user_name : ''), 'success');
+                        } else if (d.error) {
+                            // 后端错误（如登录窗口被关闭）：显示真实原因，按钮恢复为「登录 LOFTER」
+                            this.loginMessage = d.error;
+                            this.loginOk = false;
+                            this.loginStarted = false;
                         } else {
                             this.loginMessage = '尚未检测到登录，请确认已在浏览器中完成登录';
-                            this._loginOk = null;
                         }
                     } catch (e) {
                         this.loginMessage = '网络错误';
-                        this._loginOk = false;
+                        this.loginOk = false;
                     } finally { this.loginLoading = false; }
                 },
 
@@ -288,7 +946,10 @@
                     this.loggedIn = false;
                     this.userName = '';
                     this.loginMessage = '';
-                    this._loginOk = null;
+                    this.loginOk = null;
+                    this.loginStarted = false;
+                    this._pollLoginStart = false;
+                    this.toast('已清除登录会话', 'info');
                 },
 
                 // --- 下载 ---
@@ -303,24 +964,196 @@
                 async downloadSingle() {
                     if (!this.singleUrl) return;
                     const u = this.singleUrl; this.singleUrl = '';
-                    await this._send('/api/download/post', this._buildBody({ url: u }));
+                    await this._send('/api/download/post', this._buildBody({ url: u }), '单篇文章');
                 },
 
                 async downloadBlog() {
                     if (!this.userId) return;
-                    await this._send('/api/download/blog', this._buildBody({ user_id: this.userId }));
+                    await this._send('/api/download/blog', this._buildBody({ user_id: this.userId }), '作者全部文章');
                 },
 
                 async downloadLikes() {
                     if (!this.loggedIn) return;
-                    await this._send('/api/download/likes', this._buildBody({}));
+                    await this._send('/api/download/likes', this._buildBody({}), '喜欢文章');
                 },
 
-                async _send(url, body) {
-                    this.loading = true;
-                    // 持久化设置
-                    localStorage.setItem('outputFormat', this.outputFormat);
-                    localStorage.setItem('downloadDir', this.downloadDir);
+                // --- AO3 ---
+
+                detectAo3Kind(input) {
+                    if (!input) return 'single';
+                    // 多行（每行一个链接）优先判定为批量
+                    if (input.trim().includes('\n')) return 'batch';
+                    if (/\/series\/\d+/i.test(input)) return 'series';
+                    if (/\/users\/[^/]+\/works/i.test(input)) return 'author';
+                    return 'single';
+                },
+
+                // AO3 输入框随内容增高（1–6 行）
+                growAo3(el) {
+                    el.style.height = 'auto';
+                    const lh = parseFloat(getComputedStyle(el).lineHeight) || 24;
+                    const pad = 20; // py-2.5 上下各 10px
+                    el.style.height = Math.min(el.scrollHeight, lh * 6 + pad) + 'px';
+                },
+
+                async listAo3() {
+                    if (!this.ao3Input) return;
+                    const kind = this.detectAo3Kind(this.ao3Input);
+                    this.ao3Kind = kind;
+                    this.submitting = true;
+                    try {
+                        const r = await fetch('/api/list/ao3', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ kind, query: this.ao3Input })
+                        });
+                        const d = await r.json();
+                        if (d.task_id) {
+                            this.selectionTaskId = d.task_id;
+                            this.toast('正在获取 AO3 清单…', 'info');
+                            this.pollAo3ListTask();
+                        } else if (d.error) {
+                            this.toast(d.error, 'error');
+                        }
+                    } catch (e) {
+                        this.toast('网络错误，请检查后端是否正常运行', 'error');
+                    } finally { this.submitting = false; }
+                },
+
+                pollAo3ListTask() {
+                    if (!this.selectionTaskId) return;
+                    const poll = setInterval(async () => {
+                        try {
+                            const r = await fetch(`/api/tasks/${this.selectionTaskId}`);
+                            const task = await r.json();
+                            if (task.status === 'completed') {
+                                clearInterval(poll);
+                                this.openSelectionPanel(task.result.items || [], task.result.name || 'AO3', 'ao3');
+                            } else if (['failed', 'canceled'].includes(task.status)) {
+                                clearInterval(poll);
+                                this.toast(task.error || 'AO3 清单获取失败', 'error');
+                            }
+                        } catch (e) { /* 忽略轮询错误 */ }
+                    }, 1500);
+                },
+
+                async downloadAo3() {
+                    if (!this.ao3Input) return;
+                    const kind = this.detectAo3Kind(this.ao3Input);
+                    this.ao3Kind = kind;
+
+                    let urls = [];
+                    if (kind === 'batch') {
+                        urls = this.ao3Input.split('\n').map(u => u.trim()).filter(Boolean);
+                    } else if (kind === 'single') {
+                        urls = [this.ao3Input.trim()];
+                    } else {
+                        // series/author：先列出再下载
+                        return this.listAo3();
+                    }
+
+                    const body = {
+                        urls,
+                        source: this.ao3Source,
+                        format: this.ao3Source === 'official' ? this.ao3Format : this.outputFormat,
+                    };
+                    if (this.downloadDir) body.download_dir = this.downloadDir;
+                    await this._send('/api/download/ao3', body, 'AO3 文章');
+                },
+
+                // --- 选择面板 ---
+
+                openSelectionPanel(items, blogName, kind) {
+                    this.selectionItems = items || [];
+                    this.selectionSelected = {};
+                    this.selectionItems.forEach(i => { this.selectionSelected[i.url] = false; });
+                    this.selectionBlogName = blogName || '';
+                    this.selectionKind = kind || 'blog';
+                    this.selectionSearch = '';
+                    this.selectionPanelOpen = true;
+                },
+
+                closeSelectionPanel() {
+                    this.selectionPanelOpen = false;
+                },
+
+                toggleSelection(url) {
+                    this.selectionSelected = { ...this.selectionSelected, [url]: !this.selectionSelected[url] };
+                },
+
+                selectAllFiltered() {
+                    const next = { ...this.selectionSelected };
+                    this.filteredSelectionItems.forEach(i => { next[i.url] = true; });
+                    this.selectionSelected = next;
+                },
+
+                unselectAllFiltered() {
+                    const next = { ...this.selectionSelected };
+                    this.filteredSelectionItems.forEach(i => { next[i.url] = false; });
+                    this.selectionSelected = next;
+                },
+
+                async listBlog() {
+                    if (!this.userId) return;
+                    this.submitting = true;
+                    try {
+                        const r = await fetch('/api/list/blog', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_id: this.userId })
+                        });
+                        const d = await r.json();
+                        if (d.task_id) {
+                            this.selectionTaskId = d.task_id;
+                            this.toast('正在获取文章清单…', 'info');
+                            this.pollListTask();
+                        } else if (d.error) {
+                            this.toast(d.error, 'error');
+                        }
+                    } catch (e) {
+                        this.toast('网络错误，请检查后端是否正常运行', 'error');
+                    } finally { this.submitting = false; }
+                },
+
+                pollListTask() {
+                    if (!this.selectionTaskId) return;
+                    const poll = setInterval(async () => {
+                        try {
+                            const r = await fetch(`/api/tasks/${this.selectionTaskId}`);
+                            const task = await r.json();
+                            if (task.status === 'completed') {
+                                clearInterval(poll);
+                                this.openSelectionPanel(task.result.items || [], task.result.blog_name || this.userId, 'blog');
+                            } else if (['failed', 'canceled'].includes(task.status)) {
+                                clearInterval(poll);
+                                this.toast(task.error || '清单获取失败', 'error');
+                            }
+                        } catch (e) { /* 忽略轮询错误 */ }
+                    }, 1500);
+                },
+
+                async downloadSelected() {
+                    const urls = this.selectionItems
+                        .filter(i => this.selectionSelected[i.url])
+                        .map(i => i.url);
+                    if (!urls.length) return;
+                    this.closeSelectionPanel();
+                    if (this.selectionKind === 'ao3') {
+                        const body = {
+                            urls,
+                            source: this.ao3Source,
+                            format: this.ao3Source === 'official' ? this.ao3Format : this.outputFormat,
+                        };
+                        if (this.downloadDir) body.download_dir = this.downloadDir;
+                        await this._send('/api/download/ao3', body, 'AO3 选中文章');
+                    } else {
+                        await this._send('/api/download/blog', this._buildBody({ user_id: this.userId, urls }), '选中文章');
+                    }
+                },
+
+                async _send(url, body, label) {
+                    this.submitting = true;
+                    this.saveSettings();
                     try {
                         const r = await fetch(url, {
                             method: 'POST',
@@ -328,10 +1161,16 @@
                             body: JSON.stringify(body)
                         });
                         const d = await r.json();
-                        if (!d.task_id && d.error) alert(d.error);
+                        if (d.task_id) {
+                            this.toast(label + '下载已开始', 'success');
+                            this.view = 'tasks';
+                        } else if (d.error) {
+                            this.toast(d.error, 'error');
+                        }
                         this.loadTasks();
-                    } catch (e) { alert('网络错误'); }
-                    finally { this.loading = false; }
+                    } catch (e) {
+                        this.toast('网络错误，请检查后端是否正常运行', 'error');
+                    } finally { this.submitting = false; }
                 },
 
                 // --- 任务 ---
@@ -340,7 +1179,7 @@
                     try {
                         const r = await fetch('/api/tasks');
                         this.tasks = await r.json();
-                    } catch (e) { /* ignore poll errors */ }
+                    } catch (e) { /* 忽略轮询错误 */ }
                 },
 
                 async cancelTask(id) {
@@ -349,26 +1188,16 @@
                 },
 
                 typeLabel(t) {
-                    return { post: '单篇', blog: '作者全部', likes: '喜欢' }[t] || t;
-                },
-
-                statusClass(s) {
-                    return {
-                        pending: 'bg-gray-100 text-gray-600',
-                        running: 'bg-blue-100 text-blue-700',
-                        completed: 'bg-green-100 text-green-700',
-                        failed: 'bg-red-100 text-red-700',
-                        canceled: 'bg-yellow-100 text-yellow-700'
-                    }[s] || 'bg-gray-100 text-gray-600';
-                },
-
-                statusText(s) {
-                    return { pending: '等待中', running: '下载中', completed: '已完成', failed: '失败', canceled: '已取消' }[s] || s;
+                    return { post: '单篇', blog: '作者全部', likes: '喜欢', ao3: 'AO3' }[t] || t;
                 },
 
                 formatTime(iso) {
                     if (!iso) return '';
                     const d = new Date(iso);
+                    const diff = (Date.now() - d.getTime()) / 1000;
+                    if (diff < 60) return '刚刚';
+                    if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+                    if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
                     return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
                 }
             }

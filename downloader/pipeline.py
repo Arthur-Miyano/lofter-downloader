@@ -13,10 +13,10 @@ window.__INITIAL_STATE__ 在实际 LOFTER 页面中不存在，不可用。
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin
 
@@ -29,9 +29,7 @@ from downloader.parser import extract_post
 logger = logging.getLogger(__name__)
 
 # DWR API 端点
-DWR_LIKES_URL = (
-    "https://www.lofter.com/dwr/call/plaincall/BlogBean.queryLikePosts.dwr"
-)
+DWR_LIKES_URL = "https://www.lofter.com/dwr/call/plaincall/BlogBean.queryLikePosts.dwr"
 
 
 class DownloadPipeline:
@@ -70,14 +68,20 @@ class DownloadPipeline:
     # 链接收集
     # ------------------------------------------------------------------
 
-    async def collect_blog_links(self, user_id: str, context=None) -> tuple[list[str], str]:  # noqa: ANN001
-        """收集作者全部文章链接。
+    async def collect_blog_items(
+        self,
+        user_id: str,
+        context=None,  # noqa: ANN001
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> tuple[list[dict], str]:
+        """收集作者全部文章，返回 (items, blog_name)。
 
-        返回 (links, blog_name)。
-        主策略：DWR ArchiveBean API（经 lofterSpider 验证）。
-        备选：?page=N SSR 分页（仅旧模板有效）。
+        每个 item 包含 {url, title}。
+        主策略：DWR ArchiveBean API（同时提取 permalink + title）。
+        备选：?page=N SSR 分页（仅旧模板有效，标题取链接文本）。
 
         context 可选，传入时复用现有 BrowserContext（不自动关闭）。
+        should_cancel 可选，返回 True 时抛出 CancelledError 中断收集。
         """
         own_context = context is None
         if own_context:
@@ -96,20 +100,39 @@ class DownloadPipeline:
             if author_id:
                 logger.info("作者: %s (id=%s)", blog_name or domain, author_id)
                 try:
-                    links = await self._collect_blog_via_dwr(author_id, blog_url, context)
-                    if links:
-                        logger.info("DWR 获取到 %d 篇文章", len(links))
-                        return links, blog_name or domain
+                    items = await self._collect_blog_items_via_dwr(
+                        author_id,
+                        blog_url,
+                        context,
+                        should_cancel=should_cancel,
+                    )
+                    if items:
+                        logger.info("DWR 获取到 %d 篇文章", len(items))
+                        return items, blog_name or domain
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     logger.warning("DWR 链接收集失败，回退到 SSR 分页: %s", exc)
 
             # 备选: ?page=N SSR 分页（仅旧模板有效）
             logger.info("尝试 ?page=N SSR 分页")
-            links = await self._paginate(blog_url, context=context)
-            return links, domain
+            items = await self._paginate_items(
+                blog_url, context=context, should_cancel=should_cancel
+            )
+            return items, domain
         finally:
             if own_context:
                 await context.close()
+
+    async def collect_blog_links(
+        self, user_id: str, context=None,  # noqa: ANN001
+    ) -> tuple[list[str], str]:  # noqa: E501
+        """收集作者全部文章链接（兼容旧接口）。
+
+        返回 (links, blog_name)。
+        """
+        items, blog_name = await self.collect_blog_items(user_id, context=context)
+        return [item["url"] for item in items], blog_name
 
     async def collect_likes_links(self, context=None) -> list[str]:  # noqa: ANN001
         """收集喜欢全部文章链接。
@@ -136,9 +159,7 @@ class DownloadPipeline:
                 }""")
 
                 if not user_id:
-                    raise LoginRequiredError(
-                        "无法获取用户 ID，请确认已登录"
-                    )
+                    raise LoginRequiredError("无法获取用户 ID，请确认已登录")
 
                 logger.info("通过 DWR API 获取喜欢，userId=%s", user_id)
                 links = await self._call_dwr_likes(page, user_id)
@@ -189,7 +210,9 @@ class DownloadPipeline:
     # 作者信息获取
     # ------------------------------------------------------------------
 
-    async def _get_author_info(self, domain: str, context=None) -> tuple[str | None, str | None]:  # noqa: ANN001
+    async def _get_author_info(
+        self, domain: str, context=None,  # noqa: ANN001
+    ) -> tuple[str | None, str | None]:  # noqa: E501
         """从 /view 页面获取 author_id 和 blog_name。"""
         url = f"https://{domain}.lofter.com/view"
         own_context = context is None
@@ -202,7 +225,7 @@ class DownloadPipeline:
                 await _navigate(page, url)
 
                 author_id = await page.evaluate("""() => {
-                    const iframe = document.querySelector('iframe[id=\"control_frame\"]');
+                    const iframe = document.querySelector('iframe#control_frame');
                     if (!iframe) return '';
                     const m = iframe.src.match(/blogId=(\\d+)/);
                     return m ? m[1] : '';
@@ -235,13 +258,21 @@ class DownloadPipeline:
     # DWR: 博客文章列表
     # ------------------------------------------------------------------
 
-    async def _collect_blog_via_dwr(
-        self, author_id: str, blog_url: str, context=None,  # noqa: ANN001
-    ) -> list[str]:
-        """通过 DWR ArchiveBean API 分页获取全部文章链接。"""
-        all_links: list[str] = []
+    async def _collect_blog_items_via_dwr(
+        self,
+        author_id: str,
+        blog_url: str,
+        context=None,  # noqa: ANN001
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> list[dict]:
+        """通过 DWR ArchiveBean API 分页获取全部文章（含标题）。
+
+        should_cancel 可选，每个分页前检查，返回 True 时抛出 CancelledError。
+        """
+        all_items: list[dict] = []
         timestamp = str(round(time.time() * 1000))
         batch_size = 50
+        max_pages = 200  # 防空转上限
 
         dwr_url = f"{blog_url}/dwr/call/plaincall/ArchiveBean.getArchivePostByTime.dwr"
 
@@ -254,14 +285,21 @@ class DownloadPipeline:
             try:
                 await _navigate(page, blog_url)
 
-                while True:
+                for _ in range(max_pages):
+                    _raise_if_cancelled(should_cancel)
                     body = _build_dwr_body(
-                        "ArchiveBean", "getArchivePostByTime",
-                        ("boolean:false", f"number:{author_id}",
-                         f"number:{timestamp}", f"number:{batch_size}",
-                         "boolean:false"),
+                        "ArchiveBean",
+                        "getArchivePostByTime",
+                        (
+                            "boolean:false",
+                            f"number:{author_id}",
+                            f"number:{timestamp}",
+                            f"number:{batch_size}",
+                            "boolean:false",
+                        ),
                     )
-                    raw = await page.evaluate("""
+                    raw = await page.evaluate(
+                        """
                         async ([dwrUrl, body]) => {
                             const r = await fetch(dwrUrl, {
                                 method: 'POST',
@@ -270,30 +308,46 @@ class DownloadPipeline:
                             });
                             return await r.text();
                         }
-                    """, [dwr_url, body])
+                    """,
+                        [dwr_url, body],
+                    )
 
-                    permalinks = re.findall(r'permalink="([^"]+)"', raw)
-                    if not permalinks:
+                    # 按 s<N>. 记录分组解析，permalink 与 title 组内配对
+                    records = [
+                        r for r in _parse_dwr_records(raw) if r.get("permalink")
+                    ]
+                    batch_count = len(records)
+                    if batch_count == 0:
                         break
 
                     new_in_batch = 0
-                    for pl in permalinks:
-                        link = f"{blog_url}/post/{pl}"
-                        if link not in all_links:
-                            all_links.append(link)
+                    for rec in records:
+                        link = f"{blog_url}/post/{rec['permalink']}"
+                        title = next(
+                            (rec[f] for f in _DWR_TITLE_FIELDS if rec.get(f)),
+                            "",
+                        )
+                        if not any(item["url"] == link for item in all_items):
+                            all_items.append({"url": link, "title": title})
                             new_in_batch += 1
 
-                    last_timestamp = _extract_last_timestamp(raw, new_in_batch)
+                    # 游标按本批原始记录数推进（去重不影响分页位置）
+                    last_timestamp = records[-1].get("time") or _extract_last_timestamp(
+                        raw, batch_count
+                    )
 
                     logger.debug(
                         "DWR archive [ts=%s]: +%d 篇 (累计 %d)",
-                        timestamp[:10], new_in_batch, len(all_links),
+                        timestamp[:10],
+                        new_in_batch,
+                        len(all_items),
                     )
 
-                    if new_in_batch < batch_size:
+                    if not last_timestamp or last_timestamp == timestamp:
+                        # 游标无法推进，继续只会空转
                         break
 
-                    timestamp = last_timestamp or timestamp
+                    timestamp = last_timestamp
                     await asyncio.sleep(REQUEST_INTERVAL)
             finally:
                 await page.close()
@@ -301,14 +355,17 @@ class DownloadPipeline:
             if own_context:
                 await context.close()
 
-        return all_links
+        return all_items
 
     # ------------------------------------------------------------------
     # DWR: 喜欢
     # ------------------------------------------------------------------
 
     async def _call_dwr_likes(
-        self, page: Any, user_id: str, batch_size: int = 100,
+        self,
+        page: Any,
+        user_id: str,
+        batch_size: int = 100,
     ) -> list[str]:
         """调用 DWR API 分页获取全部喜欢文章链接。"""
         all_links: list[str] = []
@@ -316,11 +373,17 @@ class DownloadPipeline:
 
         while True:
             body = _build_dwr_body(
-                "BlogBean", "queryLikePosts",
-                (f"number:{user_id}", f"number:{batch_size}",
-                 f"number:{got_num}", "string:"),
+                "BlogBean",
+                "queryLikePosts",
+                (
+                    f"number:{user_id}",
+                    f"number:{batch_size}",
+                    f"number:{got_num}",
+                    "string:",
+                ),
             )
-            raw = await page.evaluate("""
+            raw = await page.evaluate(
+                """
                 async ([dwrUrl, body]) => {
                     const r = await fetch(dwrUrl, {
                         method: 'POST',
@@ -329,11 +392,16 @@ class DownloadPipeline:
                     });
                     return await r.text();
                 }
-            """, [DWR_LIKES_URL, body])
+            """,
+                [DWR_LIKES_URL, body],
+            )
 
-            found = set(re.findall(
-                r'blogPageUrl="(https?://[^"]+/post/[^"]+)"', raw,
-            ))
+            found = set(
+                re.findall(
+                    r'blogPageUrl="(https?://[^"]+/post/[^"]+)"',
+                    raw,
+                )
+            )
             if not found:
                 break
             new_links = [u for u in found if u not in all_links]
@@ -343,7 +411,9 @@ class DownloadPipeline:
             got_num += batch_size
             logger.debug(
                 "DWR 喜欢 [offset=%d]: +%d 篇 (累计 %d)",
-                got_num, len(new_links), len(all_links),
+                got_num,
+                len(new_links),
+                len(all_links),
             )
             await asyncio.sleep(REQUEST_INTERVAL)
 
@@ -351,14 +421,20 @@ class DownloadPipeline:
         return all_links
 
     # ------------------------------------------------------------------
-    # 分页遍历（SSR + SPA）
+    # 分页遍历（SSR）
     # ------------------------------------------------------------------
 
-    async def _paginate(
-        self, base_url: str, use_spa: bool = False, context=None,  # noqa: ANN001
-    ) -> list[str]:
-        """通用分页：SSR 用 ?page=N，SPA 用滚动加载。"""
-        all_links: list[str] = []
+    async def _paginate_items(
+        self,
+        base_url: str,
+        context=None,  # noqa: ANN001
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> list[dict]:
+        """SSR ?page=N 分页（返回 items: {url, title}）。
+
+        should_cancel 可选，每个分页前检查，返回 True 时抛出 CancelledError。
+        """
+        all_items: list[dict] = []
         page_num = 1
 
         own_context = context is None
@@ -367,8 +443,7 @@ class DownloadPipeline:
             context = await self._browser.new_context(storage_state=storage)
         try:
             while True:
-                if use_spa and page_num > 1:
-                    break
+                _raise_if_cancelled(should_cancel)
 
                 url = _paginated_url(base_url, page_num)
                 logger.info("分页 [%d]: %s", page_num, url)
@@ -376,32 +451,27 @@ class DownloadPipeline:
                 page = await context.new_page()
                 try:
                     await _navigate(page, url)
-
-                    if use_spa:
-                        links = await _extract_links_spa(page, base_url)
-                    else:
-                        await _wait_for_links(page)
-                        html = await page.content()
-                        links = _extract_links(html, base_url)
+                    await _wait_for_links(page)
+                    html = await page.content()
+                    items = _extract_items_from_html(html, base_url)
                 finally:
                     await page.close()
 
-                new_links: list[str] = []
-                for link in links:
-                    if link not in all_links and link not in new_links:
-                        new_links.append(link)
+                new_items: list[dict] = []
+                for item in items:
+                    if item["url"] not in {i["url"] for i in all_items}:
+                        new_items.append(item)
 
-                if not new_links:
-                    if use_spa:
-                        logger.info("SPA 页面无新链接，停止")
-                    else:
-                        logger.info("第 %d 页无新链接，停止分页", page_num)
+                if not new_items:
+                    logger.info("第 %d 页无新链接，停止分页", page_num)
                     break
 
-                all_links.extend(new_links)
+                all_items.extend(new_items)
                 logger.info(
                     "第 %d 页找到 %d 个新链接（累计 %d）",
-                    page_num, len(new_links), len(all_links),
+                    page_num,
+                    len(new_items),
+                    len(all_items),
                 )
                 page_num += 1
                 await asyncio.sleep(REQUEST_INTERVAL)
@@ -409,8 +479,8 @@ class DownloadPipeline:
             if own_context:
                 await context.close()
 
-        logger.info("分页完成，共收集 %d 个链接", len(all_links))
-        return all_links
+        logger.info("分页完成，共收集 %d 个链接", len(all_items))
+        return all_items
 
 
 # ------------------------------------------------------------------
@@ -418,13 +488,69 @@ class DownloadPipeline:
 # ------------------------------------------------------------------
 
 
+# DWR 记录字段正则：s0.permalink="..";s0.time=123;...
+# 字符串值支持 JS 转义（\"、\\ 等），避免遇转义引号截断
+_DWR_FIELD_RE = re.compile(r's(\d+)\.([\w$]+)=("(?:\\.|[^"\\])*"|[^;\n]*);')
+
+# 标题字段白名单（按优先级），不使用易误命中的 text 字段
+_DWR_TITLE_FIELDS = ("title", "caption", "blogTitle")
+
+_JS_ESCAPES = {
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    '"': '"',
+    "'": "'",
+    "\\": "\\",
+    "/": "/",
+}
+
+
+def _js_unescape(value: str) -> str:
+    """对 DWR/JS 字符串做反转义（\\n、\\"、\\\\、\\uXXXX 等）。"""
+    if "\\" not in value:
+        return value
+
+    def _replace(m: re.Match) -> str:
+        seq = m.group(1)
+        if seq.startswith("u") and len(seq) == 5:
+            try:
+                return chr(int(seq[1:], 16))
+            except ValueError:
+                return m.group(0)
+        return _JS_ESCAPES.get(seq, seq)
+
+    return re.sub(r"\\(u[0-9a-fA-F]{4}|.)", _replace, value)
+
+
+def _parse_dwr_records(raw: str) -> list[dict[str, str]]:
+    """按 s<N>. 前缀分组解析 DWR 响应，返回按序号排列的字段字典列表。
+
+    同一条记录的字段（permalink/title/time 等）归入同一字典，
+    避免跨字段 findall 后 zip 导致的缺字段错配。
+    """
+    grouped: dict[int, dict[str, str]] = {}
+    for m in _DWR_FIELD_RE.finditer(raw):
+        value = m.group(3)
+        if value.startswith('"'):
+            value = _js_unescape(value[1:-1])
+        grouped.setdefault(int(m.group(1)), {})[m.group(2)] = value
+    return [grouped[k] for k in sorted(grouped)]
+
+
+def _raise_if_cancelled(should_cancel: Callable[[], bool] | None) -> None:
+    """取消断点：回调返回 True 时抛出 CancelledError。"""
+    if should_cancel is not None and should_cancel():
+        raise asyncio.CancelledError()
+
+
 def _extract_last_timestamp(raw: str, batch_count: int) -> str | None:
-    """从 DWR 响应中提取最后一条博客的时间戳作为下一页游标。
+    """从 DWR 响应中提取最后一条记录的时间戳作为下一页游标。
 
     DWR 响应为分号分隔格式：
         s0.blogId=...;s0.time=12345;...s1.time=67890;...
 
-    取第 (batch_count - 1) 条主记录的时间戳。
+    batch_count 为本批原始记录数（未去重），取第 (batch_count - 1) 条的时间戳。
     """
     if batch_count <= 0:
         return None
@@ -438,7 +564,9 @@ def _extract_last_timestamp(raw: str, batch_count: int) -> str | None:
 
 
 def _build_dwr_body(
-    script_name: str, method_name: str, params: tuple[str, ...],
+    script_name: str,
+    method_name: str,
+    params: tuple[str, ...],
 ) -> str:
     """构建 DWR POST 请求体。"""
     lines = [
@@ -561,66 +689,22 @@ async def _wait_for_links(page: Any) -> None:
         logger.warning("分页链接等待超时，使用当前 DOM 继续")
 
 
-async def _extract_links_spa(page: Any, base_url: str) -> list[str]:
-    """SPA 页面链接提取：等待渲染 + 滚动加载 + DOM 查询。"""
-    await asyncio.sleep(2)
-
-    with contextlib.suppress(Exception):
-        await page.wait_for_selector(
-            "a[href*='/post/'], article, [class*='content'], [class*='post']",
-            timeout=15000,
-        )
-
-    # 滚动加载，连续 2 次无新链接时停止
-    all_links: list[str] = []
-    no_new_count = 0
-    while no_new_count < 2:
-        prev_count = len(all_links)
-        try:
-            dom_links: list[str] = await page.evaluate("""() => {
-                return Array.from(document.querySelectorAll("a[href*='/post/']"))
-                    .map(a => a.href);
-            }""")
-            for u in dom_links:
-                if u not in all_links:
-                    all_links.append(u)
-        except Exception:
-            pass
-
-        if len(all_links) == prev_count:
-            no_new_count += 1
-        else:
-            no_new_count = 0
-
-        if no_new_count >= 2:
-            break
-
-        await page.evaluate("window.scrollBy(0, window.innerHeight)")
-        await asyncio.sleep(1)
-
-    # HTML 兜底
-    try:
-        html = await page.content()
-        for u in _extract_links(html, base_url):
-            if u not in all_links:
-                all_links.append(u)
-    except Exception:
-        pass
-
-    return all_links
-
-
-def _extract_links(html: str, base_url: str) -> list[str]:
-    """从 HTML 中提取文章链接，去重保序。"""
+def _extract_items_from_html(html: str, base_url: str) -> list[dict]:
+    """从 HTML 中提取文章链接与标题，去重保序。"""
     soup = BeautifulSoup(html, "lxml")
-    links = []
+    items = []
+    seen = set()
     for tag in soup.select("a[href*='/post/']"):
         href = tag.get("href", "")
-        if href:
-            full = urljoin(base_url, href)
-            if full not in links:
-                links.append(full)
-    return links
+        if not href:
+            continue
+        full = urljoin(base_url, href)
+        if full in seen:
+            continue
+        seen.add(full)
+        title = tag.get_text(strip=True)
+        items.append({"url": full, "title": title})
+    return items
 
 
 def _paginated_url(base_url: str, page_num: int) -> str:

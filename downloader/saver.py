@@ -1,16 +1,16 @@
 """文章存储模块。
 
-将文章保存为 Markdown 文件，异步下载文中图片。
-含重试（指数退避）、Referer 头、非法字符清洗。
+将文章保存为 Markdown / TXT / PDF / EPUB，异步下载文中图片。
+含重试（指数退避）、Referer 头、非法字符清洗、同名冲突自动编号。
 """
 
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import time
-import uuid
 from pathlib import Path
 
 import aiofiles
@@ -34,7 +34,8 @@ MAX_TITLE_LEN = 200
 class PostSaver:
     """文章保存器。
 
-    将文章写入 Markdown 文件，带 cookie 和 Referer 下载图片。
+    将文章写入 Markdown 文件，带 cookie 和 Referer 下载图片；
+    同时支持 TXT / PDF / EPUB 导出。
     """
 
     MARKDOWN_TEMPLATE = """# {title}
@@ -81,7 +82,10 @@ class PostSaver:
         return self._http_client
 
     async def save_dict(
-        self, post_dict: dict, sub_dir: str = "", fmt: str = "md",
+        self,
+        post_dict: dict,
+        sub_dir: str = "",
+        fmt: str = "md",
     ) -> Path:
         """保存文章（从 dict 格式）。fmt: "md" | "txt" | "pdf" | "epub"。"""
         if fmt == "txt":
@@ -109,8 +113,9 @@ class PostSaver:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    async def _save_markdown(self, path: Path, post: dict,
-                             url_to_local: dict[str, str] | None = None) -> None:
+    async def _save_markdown(
+        self, path: Path, post: dict, url_to_local: dict[str, str] | None = None
+    ) -> None:
         """写入 Markdown 文件，将远程图片 URL 替换为本地相对路径。"""
         content_md = post.get("content_markdown", "")
         if url_to_local:
@@ -129,29 +134,20 @@ class PostSaver:
 
     async def _save_txt(self, post: dict, sub_dir: str) -> Path:
         """保存为纯文本 TXT 文件（单文件，无目录）。"""
-        from bs4 import BeautifulSoup
-
         title = post.get("title", "untitled")
         safe_title = _sanitize_filename(title) or f"untitled_{int(time.time())}"
         output_dir = self._base_dir / sub_dir if sub_dir else self._base_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         path = _unique_path(output_dir, safe_title, ext=".txt")
 
-        # 从 HTML 提取纯文本
-        html = post.get("content_html", "")
-        if html:
-            soup = BeautifulSoup(html, "lxml")
-            body = "\n".join(
-                p.get_text(strip=True)
-                for p in soup.select("p, div, h1, h2, h3, h4, h5, h6, li")
-            )
-            if not body:
-                body = soup.get_text(separator="\n", strip=True)
-        else:
-            body = post.get("content_markdown", "")
+        body = _markdown_to_plain_text(post.get("content_markdown", ""))
+
+        # parser 回退可能把标题混入正文首行，此时头部不再重复标题
+        body_first_line = body.splitlines()[0].strip() if body.strip() else ""
+        title_in_body = body_first_line == title.strip()
 
         lines = [
-            post.get("title", ""),
+            "" if title_in_body else post.get("title", ""),
             f"作者: {post.get('author', '')}",
             f"日期: {post.get('publish_date', '')}",
             f"链接: {post.get('url', '')}",
@@ -177,40 +173,22 @@ class PostSaver:
         pdf.add_page()
         # 使用内置中文字体（fpdf2 支持 UTF-8）
         pdf.add_font("NotoSansCJK", "", str(_font_path()), uni=True)
-        pdf.set_font("NotoSansCJK", "", 14)
-        pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT", align="C")
-        pdf.ln(4)
+        pdf.add_font("NotoSansCJK", "B", str(_font_path_bold()), uni=True)
+        pdf.add_font("NotoSansCJK", "I", str(_font_path()), uni=True)
+
+        pdf.set_font("NotoSansCJK", "B", 16)
+        # 长标题需换行，避免 cell 不换行导致溢出裁剪
+        pdf.multi_cell(0, 10, title, align="C")
+        pdf.ln(2)
         pdf.set_font("NotoSansCJK", "", 9)
         pdf.cell(0, 6, f"作者: {post.get('author', '')}", new_x="LMARGIN", new_y="NEXT")
-        pdf.cell(0, 6, f"日期: {post.get('publish_date', '')}", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(
+            0, 6, f"日期: {post.get('publish_date', '')}", new_x="LMARGIN", new_y="NEXT"
+        )
         pdf.cell(0, 6, f"链接: {post.get('url', '')}", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(6)
 
-        # 正文
-        from bs4 import BeautifulSoup
-        html = post.get("content_html", "")
-        if html:
-            soup = BeautifulSoup(html, "lxml")
-            paragraphs = []
-            for el in soup.select("p, div, h2, h3, h4, li"):
-                t = el.get_text(strip=True)
-                if t and len(t) > 1:
-                    paragraphs.append(t)
-            if not paragraphs:
-                paragraphs = [
-                    l for l in soup.get_text(separator="\n").split("\n")
-                    if l.strip()
-                ]
-        else:
-            paragraphs = [
-                l for l in post.get("content_markdown", "").split("\n")
-                if l.strip() and not l.startswith("#") and not l.startswith("![]")
-            ]
-
-        pdf.set_font("NotoSansCJK", "", 10)
-        for p_text in paragraphs:
-            pdf.multi_cell(0, 5, p_text)
-            pdf.ln(1)
+        _render_markdown_to_pdf(pdf, post.get("content_markdown", ""))
 
         pdf.output(str(path))
         logger.info("PDF 已保存: %s", path)
@@ -237,7 +215,7 @@ class PostSaver:
 
         # 下载图片到内存
         image_urls = post.get("image_urls", [])
-        epub_images: list[tuple] = []  # (url, epub_item, filename)
+        epub_images: list[tuple] = []  # (url, filename)
         if image_urls:
             client = await self._get_client()
             for idx, url in enumerate(image_urls):
@@ -250,7 +228,8 @@ class PostSaver:
                         if ct and not ct.startswith("image/"):
                             logger.warning(
                                 "EPUB 非图片响应，跳过: %s (Content-Type: %s)",
-                                url, ct,
+                                url,
+                                ct,
                             )
                             break
                         ext = _infer_extension(
@@ -259,9 +238,7 @@ class PostSaver:
                         filename = f"img_{idx:03d}{ext}"
                         img = epub.EpubImage()
                         img.file_name = f"images/{filename}"
-                        img.media_type = resp.headers.get(
-                            "content-type", "image/jpeg"
-                        )
+                        img.media_type = resp.headers.get("content-type", "image/jpeg")
                         img.content = resp.content
                         book.add_item(img)
                         epub_images.append((url, filename))
@@ -275,11 +252,11 @@ class PostSaver:
                     logger.warning("EPUB 图片下载失败: %s", url)
 
         # 构建正文 HTML：仅保留标题、正文、图片
-        html = post.get("content_html", "")
-        if html:
+        content_html = post.get("content_html", "")
+        if content_html:
             from bs4 import BeautifulSoup
 
-            soup = BeautifulSoup(html, "lxml")
+            soup = BeautifulSoup(content_html, "lxml")
             # 替换图片 src 为 epub 内嵌路径
             for img_tag in soup.find_all("img"):
                 src = img_tag.get("src", "")
@@ -289,7 +266,8 @@ class PostSaver:
                         break
                 # 移除内联样式以外可能残留的 class/id
                 img_tag.attrs = {
-                    k: v for k, v in img_tag.attrs.items()
+                    k: v
+                    for k, v in img_tag.attrs.items()
                     if k in ("src", "alt", "style")
                 }
             body_html = soup.body.decode_contents() if soup.body else str(soup)
@@ -297,13 +275,15 @@ class PostSaver:
             body_html = f"<p>{post.get('content_markdown', '')}</p>"
 
         chapter = epub.EpubHtml(
-            title="正文", file_name="chap_01.xhtml", lang="zh-CN",
+            title="正文",
+            file_name="chap_01.xhtml",
+            lang="zh-CN",
         )
         chapter.content = (
-            f"<h1>{title}</h1>"
+            f"<h1>{html.escape(title)}</h1>"
             f"<p style='color:#666;font-size:0.9em;margin-bottom:1em'>"
-            f"作者: {post.get('author', '')}<br/>"
-            f"日期: {post.get('publish_date', '')}</p>"
+            f"作者: {html.escape(post.get('author', ''))}<br/>"
+            f"日期: {html.escape(post.get('publish_date', ''))}</p>"
             f"<hr/>"
             f"{body_html}"
         )
@@ -337,12 +317,12 @@ class PostSaver:
                     ct = resp.headers.get("content-type", "")
                     if ct and not ct.startswith("image/"):
                         logger.warning(
-                            "非图片响应，跳过: %s (Content-Type: %s)", url, ct,
+                            "非图片响应，跳过: %s (Content-Type: %s)",
+                            url,
+                            ct,
                         )
                         break
-                    ext = _infer_extension(
-                        url, resp.headers.get("content-type", "")
-                    )
+                    ext = _infer_extension(url, resp.headers.get("content-type", ""))
                     img_path = image_dir / f"{idx:03d}{ext}"
                     async with aiofiles.open(str(img_path), "wb") as f:
                         await f.write(resp.content)
@@ -355,13 +335,19 @@ class PostSaver:
                     if attempt < MAX_RETRIES:
                         logger.debug(
                             "图片下载重试 [%d/%d]: %s (等待 %ss)",
-                            attempt, MAX_RETRIES, url, delay,
+                            attempt,
+                            MAX_RETRIES,
+                            url,
+                            delay,
                         )
                         await asyncio.sleep(delay)
                     else:
                         logger.warning(
                             "图片下载失败 [%d/%d]: %s - %s",
-                            attempt, MAX_RETRIES, url, exc,
+                            attempt,
+                            MAX_RETRIES,
+                            url,
+                            exc,
                         )
             if not success:
                 # 非致命：图片失败不影响文章保存
@@ -387,25 +373,63 @@ def _infer_extension(url: str, content_type: str) -> str:
 
 
 def _font_path() -> str:
-    """查找系统 CJK 字体路径（PDF 导出需要）。"""
+    """查找系统 CJK 常规字体路径（PDF 导出需要）。"""
+    return _find_font(bold=False)
+
+
+def _font_path_bold() -> str:
+    """查找系统 CJK 粗体字体路径（PDF 导出需要）。"""
+    return _find_font(bold=True)
+
+
+def _find_font(bold: bool = False) -> str:
+    """按平台查找可用的中文字体文件。"""
     import os as _os
     import platform
+
     _non_cjk = {
-        "arial", "times", "courier", "helvetica", "verdana", "georgia",
-        "trebuchet", "comic", "impact", "palatino", "garamond",
-        "segoe", "tahoma", "calibri", "cambria", "symbol",
-        "wingdings", "webdings",
+        "arial",
+        "times",
+        "courier",
+        "helvetica",
+        "verdana",
+        "georgia",
+        "trebuchet",
+        "comic",
+        "impact",
+        "palatino",
+        "garamond",
+        "segoe",
+        "tahoma",
+        "calibri",
+        "cambria",
+        "symbol",
+        "wingdings",
+        "webdings",
     }
     candidates = []
-    if platform.system() == "Windows":
+    system = platform.system()
+    if system == "Windows":
+        if bold:
+            candidates = [
+                "C:/Windows/Fonts/msyhbd.ttc",
+                "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/Dengb.ttf",
+                "C:/Windows/Fonts/simsun.ttc",
+            ]
+        else:
+            candidates = [
+                "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/simsun.ttc",
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/Deng.ttf",
+                "C:/Windows/Fonts/msgothic.ttc",
+            ]
+    elif system == "Darwin":
         candidates = [
-            "C:/Windows/Fonts/msyh.ttc",
-            "C:/Windows/Fonts/msyhbd.ttc",
-            "C:/Windows/Fonts/simsun.ttc",
-            "C:/Windows/Fonts/simhei.ttf",
-            "C:/Windows/Fonts/msgothic.ttc",
-            "C:/Windows/Fonts/Deng.ttf",
-            "C:/Windows/Fonts/Dengb.ttf",
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
         ]
     else:
         candidates = [
@@ -413,8 +437,6 @@ def _font_path() -> str:
             "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
         ]
     for path in candidates:
         if Path(path).exists() and _os.access(path, _os.R_OK):
@@ -435,13 +457,27 @@ def _font_path() -> str:
 
 
 def _unique_path(
-    base_dir: Path, safe_name: str, ext: str = "", is_dir: bool = False,
+    base_dir: Path,
+    safe_name: str,
+    ext: str = "",
+    is_dir: bool = False,
 ) -> Path:
-    """生成唯一文件或目录路径，使用 UUID 短哈希避免同名覆盖。"""
-    uid = uuid.uuid4().hex[:8]
-    if is_dir:
-        return base_dir / f"{safe_name}_{uid}"
-    return base_dir / f"{safe_name}_{uid}{ext}"
+    """生成唯一文件或目录路径，同名时追加序号 (2)、(3)…，不再使用 UUID。"""
+    candidate = base_dir / safe_name
+    if not is_dir:
+        candidate = candidate.with_suffix(ext)
+    if not candidate.exists():
+        return candidate
+
+    i = 2
+    while True:
+        numbered = f"{safe_name} ({i})"
+        candidate = base_dir / numbered
+        if not is_dir:
+            candidate = candidate.with_suffix(ext)
+        if not candidate.exists():
+            return candidate
+        i += 1
 
 
 def _sanitize_filename(name: str) -> str:
@@ -458,3 +494,168 @@ def _sanitize_filename(name: str) -> str:
     if len(cleaned) > MAX_TITLE_LEN:
         cleaned = cleaned[:MAX_TITLE_LEN].rstrip(". ")
     return cleaned
+
+
+def _markdown_to_plain_text(md: str) -> str:
+    """把 Markdown 转为易读纯文本，保留段落与列表结构，移除语法标记。"""
+    # 先做块级处理：围栏代码块整体提取，块内内容原样保留、去掉围栏行，
+    # 避免逐行处理匹配不上跨行 ``` 对导致围栏字面残留
+    code_blocks: list[str] = []
+
+    def _stash_code_block(match: re.Match) -> str:
+        code_blocks.append(match.group(1))
+        return f"\n\x00CODE{len(code_blocks) - 1}\x00\n"
+
+    text = re.sub(r"```[^\n]*\n([\s\S]*?)```", _stash_code_block, md)
+
+    # 转义 HTML 实体并移除 HTML 标签（代码块已提取，不受影响）
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", "", text)
+
+    lines = text.splitlines()
+    result: list[str] = []
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            result.append("")
+            continue
+
+        stripped = line
+        # 代码块占位符：原样保留，待最后还原
+        if re.fullmatch(r"\x00CODE\d+\x00", stripped.strip()):
+            result.append(stripped.strip())
+            continue
+        # 分隔线：替换为空行
+        if re.match(r"^\s*([-*_])(\s*\1){2,}\s*$", stripped):
+            result.append("")
+            continue
+        # 标题：去掉前导 # 并保留文字
+        if re.match(r"^#{1,6}\s+", stripped):
+            stripped = re.sub(r"^#{1,6}\s+", "", stripped)
+        # 列表标记（有序列表保留序号，避免丢失枚举信息）
+        stripped = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", stripped)
+        # 引用
+        stripped = re.sub(r"^>\s*", "", stripped)
+        # 行内格式
+        stripped = _strip_inline_markdown(stripped)
+
+        result.append(stripped)
+
+    # 合并连续空行，保留段落间距
+    cleaned: list[str] = []
+    prev_empty = False
+    for line in result:
+        is_empty = line.strip() == ""
+        if is_empty and prev_empty:
+            continue
+        cleaned.append(line)
+        prev_empty = is_empty
+
+    joined = "\n".join(cleaned).strip()
+
+    # 还原代码块内容
+    def _restore_code_block(match: re.Match) -> str:
+        return code_blocks[int(match.group(1))].strip("\n")
+
+    return re.sub(r"\x00CODE(\d+)\x00", _restore_code_block, joined)
+
+
+def _strip_inline_markdown(text: str) -> str:
+    """移除行内 Markdown 语法（加粗、斜体、链接、代码、删除线），保留文字。"""
+    # 行内代码
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # 图片 → 去掉
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
+    # 链接 → 保留文本
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # 裸链接 <url>
+    text = re.sub(r"<([^>]+)>", r"\1", text)
+    # 加粗/斜体（按长度优先，避免 ** 被 * 先匹配）
+    text = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", text)
+    text = re.sub(r"___(.*?)___", r"\1", text)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    # 下划线斜体仅在两侧是单词边界时应用，避免误删 snake_case 中的下划线
+    text = re.sub(r"(?<![\w_])_([^_]+?)_(?![\w_])", r"\1", text)
+    # 删除线
+    text = re.sub(r"~~(.*?)~~", r"\1", text)
+    return text
+
+
+def _render_markdown_to_pdf(pdf: object, md: str) -> None:
+    """按 Markdown 结构渲染 PDF：标题、段落、列表、代码块、缩进。"""
+    lines = md.splitlines()
+    i = 0
+    in_code_block = False
+    while i < len(lines):
+        raw = lines[i]
+        line = raw.rstrip()
+        if not line.strip():
+            pdf.ln(2)
+            i += 1
+            continue
+
+        # 围栏代码块：去掉围栏行，块内内容原样保留
+        if line.lstrip().startswith("```"):
+            in_code_block = not in_code_block
+            i += 1
+            continue
+        if in_code_block:
+            pdf.set_font("NotoSansCJK", "", 10)
+            pdf.multi_cell(0, 5, line)
+            i += 1
+            continue
+
+        # 图片替换为占位文本，避免纯图集文章产出空文
+        line = re.sub(r"!\[[^\]]*\]\([^)]+\)", "[图片]", line)
+
+        # 标题
+        heading_match = re.match(r"^(#{1,6})\s+(.*)", line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            text = _strip_inline_markdown(heading_match.group(2))
+            sizes = {1: 16, 2: 14, 3: 12, 4: 11, 5: 10, 6: 10}
+            pdf.set_font("NotoSansCJK", "B", sizes.get(level, 10))
+            pdf.multi_cell(0, 6, text)
+            pdf.ln(2)
+            i += 1
+            continue
+
+        # 无序列表
+        bullet_match = re.match(r"^(\s*)[-*+]\s+(.*)", line)
+        if bullet_match:
+            indent = len(bullet_match.group(1))
+            text = _strip_inline_markdown(bullet_match.group(2))
+            pdf.set_font("NotoSansCJK", "", 10)
+            pdf.set_x(pdf.l_margin + min(indent, 8) * 3)
+            pdf.cell(4, 5, "•")
+            pdf.multi_cell(0, 5, text)
+            i += 1
+            continue
+
+        # 有序列表
+        number_match = re.match(r"^(\s*)\d+\.\s+(.*)", line)
+        if number_match:
+            indent = len(number_match.group(1))
+            text = _strip_inline_markdown(number_match.group(2))
+            pdf.set_font("NotoSansCJK", "", 10)
+            pdf.set_x(pdf.l_margin + min(indent, 8) * 3)
+            pdf.multi_cell(0, 5, line.strip())
+            i += 1
+            continue
+
+        # 引用
+        if line.lstrip().startswith("> "):
+            text = _strip_inline_markdown(line.lstrip()[2:])
+            pdf.set_font("NotoSansCJK", "I", 10)
+            pdf.set_x(pdf.l_margin + 4)
+            pdf.multi_cell(0, 5, text)
+            i += 1
+            continue
+
+        # 普通段落
+        pdf.set_font("NotoSansCJK", "", 10)
+        pdf.multi_cell(0, 5, _strip_inline_markdown(line))
+        pdf.ln(1)
+        i += 1

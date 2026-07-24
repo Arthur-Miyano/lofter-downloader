@@ -7,11 +7,15 @@
 | 层次 | 选型 | 说明 |
 |------|------|------|
 | Web 框架 | Flask 3.x | 同步框架，Werkzeug 多线程开发服务器 |
+| 桌面窗口 | pywebview (Edge WebView2) | 无边框桌面 App 窗口，Flask 跑后台线程 |
 | 前端 | Alpine.js + Tailwind CSS | CDN 引入，零构建 |
 | 浏览器自动化 | Playwright (Python async API) | 加载 SPA 页面、执行 JS 提取 |
 | HTML 解析 | BeautifulSoup4 + lxml | 从 `page.content()` 解析 DOM |
+| HTML → Markdown | markdownify | LOFTER 正文与 AO3 解析管道共用 |
+| 异步写文件 | aiofiles | saver 存储层 |
 | 图片下载 | httpx (async) | 携带 session cookie + Referer 头 |
 | PDF 生成 | fpdf2 | 纯 Python，支持 CJK 字体 |
+| EPUB 生成 | ebooklib | 嵌入图片，保留 HTML 排版 |
 | 登录持久化 | storageState JSON | Playwright 原生格式 |
 | 任务追踪 | 内存 dict + threading.Lock | 单用户，无需持久化 |
 
@@ -28,10 +32,11 @@ lofter-downloader/
 │   ├── browser.py            # BrowserManager（后台线程 + 事件循环）
 │   ├── auth.py               # 登录函数（无类）
 │   ├── pipeline.py           # DownloadPipeline（统一下载流程）
+│   ├── ao3.py                # AO3Client（清单 / 官方导出 / 解析管道）
 │   ├── parser.py             # 文章解析（3 策略降级）
 │   ├── models.py             # Post / Task 数据类 + TaskManager（线程安全）
-│   ├── saver.py              # Markdown / TXT / PDF 存储 + 图片下载
-│   └── exceptions.py         # 5 个自定义异常
+│   ├── saver.py              # Markdown / TXT / PDF / EPUB 存储 + 图片下载
+│   └── exceptions.py         # 4 个自定义异常（AO3Error 定义在 ao3.py）
 │
 ├── web/
 │   ├── routes.py             # Flask Blueprint（全部 API 路由）
@@ -45,7 +50,10 @@ lofter-downloader/
 └── tests/
     ├── conftest.py
     ├── test_parser.py        # 解析器单元测试
-    └── test_routes.py        # API 路由集成测试
+    ├── test_models.py        # TaskManager 单元测试
+    ├── test_routes.py        # API 路由集成测试
+    ├── test_saver.py         # 存储层单元测试
+    └── test_ao3.py           # AO3 客户端单元测试
 ```
 
 ## 三、核心架构：Flask 同步 + Playwright 异步
@@ -186,12 +194,15 @@ class TaskManager:
 PostSaver(base_dir, cookies=None)
 ├── save_dict(post_dict, sub_dir, fmt) → Path
 │   ├── fmt="md": _make_post_dir() + _save_markdown() + _save_images()
-│   ├── fmt="txt": _save_txt()  # 单文件，纯文本提取
-│   └── fmt="pdf": _save_pdf()  # 单文件，fpdf2 + CJK 字体
+│   ├── fmt="txt": _save_txt()   # 单文件，由 Markdown 渲染为纯文本
+│   ├── fmt="pdf": _save_pdf()   # 单文件，由 Markdown 渲染，fpdf2 + CJK 字体
+│   └── fmt="epub": _save_epub() # 单文件，ebooklib，嵌入图片
 ├── _save_markdown(path, post)        # MARKDOWN_TEMPLATE
-├── _save_txt(post, sub_dir)          # BS4 文本提取 + 元数据头
-├── _save_pdf(post, sub_dir)          # fpdf2 PDF 生成
+├── _save_txt(post, sub_dir)          # _markdown_to_plain_text + 元数据头
+├── _save_pdf(post, sub_dir)          # _render_markdown_to_pdf，fpdf2 生成
+├── _save_epub(post, sub_dir)         # ebooklib，保留 HTML 排版 + 嵌入图片
 ├── _save_images(images_dir, urls)    # 重试 + 指数退避
+├── _unique_path(...)                 # 同名冲突追加序号 (2)、(3)…
 ├── _font_path() → str                # 系统 CJK 字体查找
 └── close()                           # 关闭 httpx 客户端
 ```
@@ -207,15 +218,18 @@ PostSaver(base_dir, cookies=None)
 
 **文件名安全：** `_sanitize_filename()` 替换 `<>:"/\|?*` 为 `_`，去除首尾空格和点，截断到 200 字符。全特殊字符标题降级为 `untitled_{timestamp}`。
 
+**命名规则：** 文件/目录使用干净的标题名，无 UUID 随机后缀；同名冲突时 `_unique_path()` 自动追加序号 `(2)`、`(3)`…。子目录按来源组织：单篇为 `{作者名}/`（无作者名时回退 `单篇下载/`）、作者批量为 `{博客名}/`、喜欢文章为 `喜欢文章/`、AO3 为 `AO3/{作者名}/`。
+
 ### 4.8 `downloader/exceptions.py` — 异常
 
 ```
 LofterError (base)
 ├── LoginRequiredError    — 会话过期 / 未登录
 ├── ParseError            — 所有提取策略失败
-├── NetworkError          — 页面导航重试耗尽
-└── TaskCanceledError     — 任务被用户取消
+└── NetworkError          — 页面导航重试耗尽
 ```
+
+`AO3Error` 定义在 `downloader/ao3.py`（AO3 模块自定义异常）。
 
 ### 4.9 `web/routes.py` — API 路由
 
@@ -236,8 +250,10 @@ Flask Blueprint。模块级变量维护登录状态（单用户模式）：
 
 **后台下载协程：**
 - `_run_post(task_id, url, fmt, dl_dir)` — 单篇下载
-- `_run_blog(task_id, user_id, fmt, dl_dir)` — 批量下载作者文章
+- `_run_blog(task_id, user_id, fmt, dl_dir, urls)` — 批量下载作者文章（urls 非空时只下载勾选项）
 - `_run_likes(task_id, fmt, dl_dir)` — 批量下载喜欢文章
+- `_run_download_ao3(task_id, urls, fmt, source, dl_dir)` — AO3 下载（官方导出或解析管道）
+- `_run_list_blog` / `_run_list_ao3` — 清单收集任务（结果存 `task.result`）
 - `_save_results(post_dicts, sub_dir, fmt, dl_dir)` — 通用保存入口
 
 ### 4.10 `web/templates/index.html` — 前端
@@ -246,8 +262,8 @@ Alpine.js 单页应用，2 秒轮询 `GET /api/tasks` 更新进度。
 
 **主要区域：**
 - 登录区域：状态显示（@username + 首字母头像）、登录/检查/清除按钮
-- 下载设置：格式单选（Markdown / TXT / PDF）、保存目录输入 + 文件夹浏览器
-- 下载操作：单篇 URL 输入、作者 ID 输入、喜欢下载按钮
+- 下载设置：格式单选（Markdown / TXT / PDF / EPUB）、保存目录输入 + 文件夹浏览器
+- 下载操作：单篇 URL 输入、作者 ID 输入（含「选择文章」清单面板）、喜欢下载按钮、AO3 区域（单篇/系列/作者/批量链接 + 清单选择面板）
 - 任务列表：进度条、状态标签、错误信息、取消按钮
 - 已完成列表：历史任务状态 + 时间戳
 
@@ -258,13 +274,16 @@ Alpine.js 单页应用，2 秒轮询 `GET /api/tasks` 更新进度。
 | 方法 | 路径 | 请求体 | 响应 | 说明 |
 |------|------|--------|------|------|
 | GET | `/` | — | HTML | 前端页面 |
-| GET | `/api/login/status` | — | `{logged_in, user_name}` | 登录状态 |
+| GET | `/api/login/status` | — | `{logged_in, user_name, login_starting, login_ready, login_start_error}` | 登录状态 |
 | POST | `/api/login/start` | — | `{ok, message}` | 启动浏览器登录 |
 | POST | `/api/login/check` | — | `{ok, logged_in, user_name}` | 检查登录结果 |
 | DELETE | `/api/login` | — | `{ok}` | 清除登录（含取消运行中任务） |
 | POST | `/api/download/post` | `{url, format?, download_dir?}` | `{task_id}` 或 `{ok:false, error}` | 下载单篇 |
 | POST | `/api/download/blog` | `{user_id, format?, download_dir?}` | `{task_id}` 或 `{ok:false, error}` | 下载作者全部 |
 | POST | `/api/download/likes` | `{format?, download_dir?}` | `{task_id}` 或 `{ok:false, error}` | 下载喜欢（需登录） |
+| POST | `/api/list/blog` | `{user_id}` | `{task_id}` | 列出作者文章清单（选择下载用） |
+| POST | `/api/list/ao3` | `{kind, query}` | `{task_id}` | 列出 AO3 系列/作者/批量链接清单 |
+| POST | `/api/download/ao3` | `{urls, source?, format?, download_dir?}` | `{task_id}` 或 `{ok:false, error}` | 下载 AO3（官方导出或解析管道） |
 | GET | `/api/tasks` | — | `[{task}]` | 任务列表 |
 | GET | `/api/tasks/<id>` | — | `{task}` 或 404 | 单个任务 |
 | POST | `/api/tasks/<id>/cancel` | — | `{ok}` | 取消任务 |
@@ -331,9 +350,11 @@ httpx>=0.27          # 图片下载
 aiofiles>=23.2       # 异步文件写入
 markdownify>=0.12    # HTML → Markdown 转换
 fpdf2>=2.8           # PDF 生成（纯 Python，CJK 支持）
+ebooklib>=0.18       # EPUB 生成
+pywebview>=6.0       # 桌面 App 窗口
 ```
 
-开发依赖：`pytest>=8.0`, `pytest-cov>=5.0`, `ruff>=0.8`
+开发依赖：`pytest>=8.0`, `pytest-asyncio`, `ruff>=0.8`
 
 ## 九、线框截图页
 

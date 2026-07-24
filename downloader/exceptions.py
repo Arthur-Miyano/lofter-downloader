@@ -17,5 +17,3 @@ class ParseError(LofterError):
 
 class NetworkError(LofterError):
     """网络请求失败。"""
-
-

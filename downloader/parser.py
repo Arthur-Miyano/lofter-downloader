@@ -33,7 +33,8 @@ async def extract_post(page: Page, url: str) -> dict | None:
 
     logger.info(
         "文章解析成功 (title=%s, content_len=%d)",
-        result.get("title", ""), len(result.get("content_html", "")),
+        result.get("title", ""),
+        len(result.get("content_html", "")),
     )
     return result
 
@@ -56,8 +57,7 @@ def _try_html(html: str, url: str) -> dict | None:
     # 注意：[class*='detail'] 会误匹配 body.p-detailpage，
     # [class*='content'] 在 LOFTER 实测无匹配，均移除。
     content_el = soup.select_one(
-        ".m-postdtl, [class*='postdtl'], .m-post, "
-        ".postinner, article, .m-detail"
+        ".m-postdtl, [class*='postdtl'], .m-post, .postinner, article, .m-detail"
     )
     # 排除 body/html 标签（某些宽泛选择器可能误匹配）
     if content_el is not None and content_el.name in ("body", "html"):
@@ -78,7 +78,9 @@ def _try_html(html: str, url: str) -> dict | None:
 
     # 日期：优先查找 .date 元素，其次从正文匹配 YYYY-MM-DD / YYYY.MM.DD
     body_text = soup.body.get_text(separator=" ", strip=True) if soup.body else ""
-    date = _extract_date_from_text(body_text, content_html) or _extract_date_from_soup(soup)
+    date = _extract_date_from_text(body_text, content_html) or _extract_date_from_soup(
+        soup
+    )
 
     # 图片：内容区域中的 img（排除头像和小图标）
     images = _extract_images(content_html or html)
@@ -120,8 +122,19 @@ def _find_largest_text_block(soup: BeautifulSoup) -> object | None:
         cls = (el.get("class") or [""])[0] if el.get("class") else ""
         cls_str = str(cls).lower()
         tokens = set(re.split(r"[\s\-_]+", cls_str))
-        if tokens & {"nav", "footer", "header", "sidebar", "menu", "script",
-                       "recommend", "ad", "banner", "comment", "tag"}:
+        if tokens & {
+            "nav",
+            "footer",
+            "header",
+            "sidebar",
+            "menu",
+            "script",
+            "recommend",
+            "ad",
+            "banner",
+            "comment",
+            "tag",
+        }:
             continue
         text = el.get_text(strip=True)
         if len(text) > best_len:
@@ -133,8 +146,10 @@ def _find_largest_text_block(soup: BeautifulSoup) -> object | None:
 def _extract_author(soup: BeautifulSoup) -> str:
     """从 DOM 提取作者名。"""
     selectors = [
-        "[class*='author']", "[class*='blogname']",
-        "[data-blogname]", ".blogname",
+        "[class*='author']",
+        "[class*='blogname']",
+        "[data-blogname]",
+        ".blogname",
     ]
     for sel in selectors:
         tag = soup.select_one(sel)
@@ -151,11 +166,20 @@ def _extract_date_from_text(body_text: str, content_html: str) -> str:
     for source in (content_html, body_text):
         if not source:
             continue
-        for pattern in (r"(\d{4}-\d{2}-\d{2})", r"(\d{4}\.\d{2}\.\d{2})",
-                        r"(\d{4}年\d{1,2}月\d{1,2}日)"):
+        for pattern in (
+            r"(\d{4}-\d{2}-\d{2})",
+            r"(\d{4}\.\d{2}\.\d{2})",
+            r"(\d{4}年\d{1,2}月\d{1,2}日)",
+        ):
             m = re.search(pattern, source)
             if m:
-                return m.group(1).replace(".", "-").replace("年", "-").replace("月", "-").replace("日", "")
+                return (
+                    m.group(1)
+                    .replace(".", "-")
+                    .replace("年", "-")
+                    .replace("月", "-")
+                    .replace("日", "")
+                )
     return ""
 
 
@@ -177,9 +201,19 @@ def _extract_images(content_html: str) -> list[str]:
     # 过滤掉头像、图标、太小的图片等
     result = []
     for src in srcs:
-        if any(kw in src.lower() for kw in
-               ("avatar", "icon", "logo", "favicon", "thumbnail=16",
-                "thumbnail=32", "thumbnail=48", "thumbnail=64")):
+        if any(
+            kw in src.lower()
+            for kw in (
+                "avatar",
+                "icon",
+                "logo",
+                "favicon",
+                "thumbnail=16",
+                "thumbnail=32",
+                "thumbnail=48",
+                "thumbnail=64",
+            )
+        ):
             continue
         result.append(src)
     return result
