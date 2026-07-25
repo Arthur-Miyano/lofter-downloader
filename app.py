@@ -38,10 +38,11 @@ def create_app() -> Flask:
     browser_mgr = BrowserManager(headless=True)
     browser_mgr.start()
 
-    # 注入 browser 到 routes 模块
+    # 注入 browser 到共享状态模块
     import web.routes as routes
+    from web import state
 
-    routes.browser = browser_mgr
+    state.browser = browser_mgr
 
     # 确保下载目录存在
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)

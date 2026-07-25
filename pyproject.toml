@@ -55,7 +55,7 @@ src = [".", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "ANN", "B", "SIM", "ARG", "C4", "T10"]
 ignore = ["ANN401", "ANN002", "ANN003"]
-per-file-ignores = {"tests/*" = ["ANN"], "web/routes.py" = ["ANN"]}
+per-file-ignores = {"tests/*" = ["ANN"]}
 
 [tool.pytest.ini_options]
 minversion = "8.0"

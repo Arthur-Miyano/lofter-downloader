@@ -20,7 +20,7 @@ def app():
     app.config["TESTING"] = True
 
     # 注入 mock browser
-    import web.routes as routes
+    from web import state
 
     mock_bm = MagicMock()
     mock_bm.submit = MagicMock(return_value={"logged_in": False})
@@ -31,17 +31,17 @@ def app():
         return MagicMock()
 
     mock_bm.submit_async = MagicMock(side_effect=_submit_async)
-    routes.browser = mock_bm
+    state.browser = mock_bm
 
     # 重置模块级状态
-    routes._login_page = None  # noqa: SLF001
-    routes._login_context = None  # noqa: SLF001
-    routes._login_browser = None  # noqa: SLF001
-    routes._login_in_progress = False  # noqa: SLF001
-    routes._user_name = ""  # noqa: SLF001
-    routes._running_task_id = None  # noqa: SLF001
-    routes._running_list_kind = None  # noqa: SLF001
-    routes.task_manager = TaskManager()
+    state._login_page = None  # noqa: SLF001
+    state._login_context = None  # noqa: SLF001
+    state._login_browser = None  # noqa: SLF001
+    state._login_in_progress = False  # noqa: SLF001
+    state._user_name = ""  # noqa: SLF001
+    state._running_task_id = None  # noqa: SLF001
+    state._running_list_kind = None  # noqa: SLF001
+    state.task_manager = TaskManager()
 
     return app
 
@@ -60,24 +60,24 @@ class TestLogin:
     """登录相关端点测试。"""
 
     def test_login_status_not_logged_in(self, client) -> None:  # noqa: ANN001
-        with patch("web.routes.SESSION_PATH") as mock_path:
+        with patch("web.login.SESSION_PATH") as mock_path:
             mock_path.exists.return_value = False
             resp = client.get("/api/login/status")
             data = json.loads(resp.data)
             assert data["logged_in"] is False
 
     def test_start_login(self, client) -> None:  # noqa: ANN001
-        import web.routes as routes
+        from web import state
 
-        routes.browser._playwright = MagicMock()  # noqa: SLF001
+        state.browser._playwright = MagicMock()  # noqa: SLF001
         resp = client.post("/api/login/start")
         data = json.loads(resp.data)
         # 非阻塞设计：立即返回 starting，headed 浏览器在后台启动
         assert data["ok"] is True
         assert data["status"] == "starting"
-        routes.browser.submit_async.assert_called_once()
+        state.browser.submit_async.assert_called_once()
         # 测试产生的后台协程需要关闭，避免未等待警告
-        coro = routes.browser.submit_async.call_args.args[0]
+        coro = state.browser.submit_async.call_args.args[0]
         coro.close()
 
     def test_check_login_not_started(self, client) -> None:  # noqa: ANN001
@@ -121,7 +121,7 @@ class TestDownloads:
         assert "task_id" in data
 
     def test_download_likes_without_session(self, client) -> None:  # noqa: ANN001
-        with patch("web.routes.SESSION_PATH") as mock_path:
+        with patch("web.downloads.SESSION_PATH") as mock_path:
             mock_path.exists.return_value = False
             resp = client.post("/api/download/likes")
             assert resp.status_code == 403
@@ -135,9 +135,9 @@ class TestDownloads:
         assert "task_id" in data
 
     def test_download_ao3_creates_task(self, client) -> None:  # noqa: ANN001
-        import web.routes as routes
+        from web import state
 
-        routes._running_task_id = None  # noqa: SLF001
+        state._running_task_id = None  # noqa: SLF001
         resp = client.post(
             "/api/download/ao3",
             json={"urls": ["https://archiveofourown.org/works/12345"]},
@@ -200,12 +200,12 @@ class TestTasks:
 
     def test_concurrent_download_rejected(self, client) -> None:  # noqa: ANN001
         """同时提交两个下载任务，第二个应被拒绝。"""
-        import web.routes as routes
+        from web import state
 
-        routes._running_task_id = "fake_running"  # noqa: SLF001
-        task = routes.task_manager.create("post")
-        routes.task_manager.update(task, status=TaskStatus.RUNNING)
-        routes._running_task_id = task  # noqa: SLF001
+        state._running_task_id = "fake_running"  # noqa: SLF001
+        task = state.task_manager.create("post")
+        state.task_manager.update(task, status=TaskStatus.RUNNING)
+        state._running_task_id = task  # noqa: SLF001
 
         resp = client.post(
             "/api/download/post",
@@ -217,16 +217,16 @@ class TestTasks:
 
     def test_download_various_types(self, client) -> None:  # noqa: ANN001
         """验证三种下载类型均可创建任务。"""
-        import web.routes as routes
+        from web import state
 
         # 喜欢（需模拟已登录）
-        with patch("web.routes.SESSION_PATH") as mock_path:
+        with patch("web.downloads.SESSION_PATH") as mock_path:
             mock_path.exists.return_value = True
             resp = client.post("/api/download/likes")
             assert json.loads(resp.data)["task_id"]
 
         # 重置并发控制，模拟第一个任务已完成
-        routes._running_task_id = None  # noqa: SLF001
+        state._running_task_id = None  # noqa: SLF001
 
         # 作者
         resp = client.post(
@@ -237,10 +237,10 @@ class TestTasks:
 
     def test_cancel_task_invalid_status(self, client) -> None:  # noqa: ANN001
         """已完成的任务不能被取消。"""
-        import web.routes as routes
+        from web import state
 
-        tid = routes.task_manager.create("post")
-        routes.task_manager.update(tid, status=TaskStatus.COMPLETED)
+        tid = state.task_manager.create("post")
+        state.task_manager.update(tid, status=TaskStatus.COMPLETED)
 
         resp = client.post(f"/api/tasks/{tid}/cancel")
         data = json.loads(resp.data)
@@ -248,7 +248,7 @@ class TestTasks:
 
     def test_download_likes_requires_login(self, client) -> None:  # noqa: ANN001
         """喜欢下载需要登录。"""
-        with patch("web.routes.SESSION_PATH") as mock_path:
+        with patch("web.downloads.SESSION_PATH") as mock_path:
             mock_path.exists.return_value = False
             resp = client.post("/api/download/likes")
             assert resp.status_code == 403
@@ -282,23 +282,23 @@ class TestRunDownloadAo3:
 
     @pytest.mark.asyncio
     async def test_all_failed_marks_task_failed(self) -> None:
-        import web.routes as routes
         from downloader.ao3 import AO3Client, AO3Error
         from downloader.models import TaskManager, TaskStatus
+        from web import downloads, state
 
-        routes.task_manager = TaskManager()
-        tid = routes.task_manager.create("ao3")
+        state.task_manager = TaskManager()
+        tid = state.task_manager.create("ao3")
         with patch.object(
             AO3Client, "get_work_info", side_effect=AO3Error("shields up")
         ):
-            await routes._run_download_ao3(
+            await downloads._run_download_ao3(
                 tid,
                 ["https://archiveofourown.org/works/12345"],
                 "epub",
                 "official",
                 "",
             )
-        task = routes.task_manager.get(tid)
+        task = state.task_manager.get(tid)
         assert task.status == TaskStatus.FAILED
         assert "shields up" in task.error
 
@@ -345,10 +345,10 @@ class TestSubmitAsyncFailure:
     """submit_async 抛 LofterError 时的并发槽位恢复。"""
 
     def test_lofter_error_resets_running_task(self, client) -> None:  # noqa: ANN001
-        import web.routes as routes
         from downloader.exceptions import LofterError
+        from web import state
 
-        routes.browser.submit_async = MagicMock(
+        state.browser.submit_async = MagicMock(
             side_effect=LofterError("浏览器事件循环未运行")
         )
         resp = client.post(
@@ -356,13 +356,13 @@ class TestSubmitAsyncFailure:
             json={"url": "https://test.lofter.com/post/1"},
         )
         assert resp.status_code == 500
-        assert routes._running_task_id is None  # noqa: SLF001
+        assert state._running_task_id is None  # noqa: SLF001
         # 任务被标记为 FAILED 而不是永卡 PENDING
-        task = routes.task_manager.list_all()[0]
+        task = state.task_manager.list_all()[0]
         assert task.status == TaskStatus.FAILED
 
         # 并发槽位已释放：后续任务不再 409
-        routes.browser.submit_async = MagicMock(side_effect=_close_coro)
+        state.browser.submit_async = MagicMock(side_effect=_close_coro)
         resp = client.post(
             "/api/download/post",
             json={"url": "https://test.lofter.com/post/1"},
@@ -422,10 +422,10 @@ class TestTasksSummary:
     """/api/tasks 列表摘要与单任务完整 result。"""
 
     def _create_list_task_with_items(self) -> str:
-        import web.routes as routes
+        from web import state
 
-        tid = routes.task_manager.create("list_blog")
-        routes.task_manager.update(
+        tid = state.task_manager.create("list_blog")
+        state.task_manager.update(
             tid,
             status=TaskStatus.COMPLETED,
             result={
@@ -465,10 +465,10 @@ class TestSubDirNaming:
         return saver
 
     async def test_run_post_uses_author(self) -> None:
-        import web.routes as routes
+        from web import downloads, state
 
-        routes.task_manager = TaskManager()
-        tid = routes.task_manager.create("post")
+        state.task_manager = TaskManager()
+        tid = state.task_manager.create("post")
         pipeline = MagicMock()
         pipeline.run_post = AsyncMock(
             return_value=[{"author": "张三", "title": "标题"}]
@@ -477,17 +477,17 @@ class TestSubDirNaming:
         with (
             patch("downloader.pipeline.DownloadPipeline", return_value=pipeline),
             patch("downloader.saver.PostSaver", return_value=saver),
-            patch("web.routes.load_storage_state", return_value=None),
+            patch("web.downloads.load_storage_state", return_value=None),
         ):
-            await routes._run_post(tid, "https://test.lofter.com/post/1")
+            await downloads._run_post(tid, "https://test.lofter.com/post/1")
         assert saver.save_dict.call_args.kwargs["sub_dir"] == "张三"
 
     async def test_run_blog_uses_blog_name(self) -> None:
-        import web.routes as routes
+        from web import downloads, state
 
-        routes.task_manager = TaskManager()
-        routes.browser.new_context = AsyncMock(return_value=self._make_ctx())
-        tid = routes.task_manager.create("blog")
+        state.task_manager = TaskManager()
+        state.browser.new_context = AsyncMock(return_value=self._make_ctx())
+        tid = state.task_manager.create("blog")
         pipeline = MagicMock()
         pipeline.collect_blog_links = AsyncMock(
             return_value=(["https://test.lofter.com/post/1"], "测试博客")
@@ -497,29 +497,29 @@ class TestSubDirNaming:
         with (
             patch("downloader.pipeline.DownloadPipeline", return_value=pipeline),
             patch("downloader.saver.PostSaver", return_value=saver),
-            patch("web.routes.load_storage_state", return_value=None),
+            patch("web.downloads.load_storage_state", return_value=None),
             patch("asyncio.sleep", new=AsyncMock()),
         ):
-            await routes._run_blog(tid, "12345678")
+            await downloads._run_blog(tid, "12345678")
         assert saver.save_dict.call_args.kwargs["sub_dir"] == "测试博客"
 
     async def test_run_blog_selected_uses_passed_blog_name(self) -> None:
         """选中下载（urls 模式）使用前端回传的 blog_name 而非数字 ID。"""
-        import web.routes as routes
+        from web import downloads, state
 
-        routes.task_manager = TaskManager()
-        routes.browser.new_context = AsyncMock(return_value=self._make_ctx())
-        tid = routes.task_manager.create("blog")
+        state.task_manager = TaskManager()
+        state.browser.new_context = AsyncMock(return_value=self._make_ctx())
+        tid = state.task_manager.create("blog")
         pipeline = MagicMock()
         pipeline.run_post = AsyncMock(return_value=[{"title": "t", "author": "a"}])
         saver = self._make_saver()
         with (
             patch("downloader.pipeline.DownloadPipeline", return_value=pipeline),
             patch("downloader.saver.PostSaver", return_value=saver),
-            patch("web.routes.load_storage_state", return_value=None),
+            patch("web.downloads.load_storage_state", return_value=None),
             patch("asyncio.sleep", new=AsyncMock()),
         ):
-            await routes._run_blog(
+            await downloads._run_blog(
                 tid,
                 "12345678",
                 urls=["https://test.lofter.com/post/1"],
@@ -528,11 +528,11 @@ class TestSubDirNaming:
         assert saver.save_dict.call_args.kwargs["sub_dir"] == "测试博客"
 
     async def test_run_likes_uses_fixed_dir(self) -> None:
-        import web.routes as routes
+        from web import downloads, state
 
-        routes.task_manager = TaskManager()
-        routes.browser.new_context = AsyncMock(return_value=self._make_ctx())
-        tid = routes.task_manager.create("likes")
+        state.task_manager = TaskManager()
+        state.browser.new_context = AsyncMock(return_value=self._make_ctx())
+        tid = state.task_manager.create("likes")
         pipeline = MagicMock()
         pipeline.collect_likes_links = AsyncMock(
             return_value=["https://test.lofter.com/post/1"]
@@ -542,17 +542,17 @@ class TestSubDirNaming:
         with (
             patch("downloader.pipeline.DownloadPipeline", return_value=pipeline),
             patch("downloader.saver.PostSaver", return_value=saver),
-            patch("web.routes.load_storage_state", return_value=None),
+            patch("web.downloads.load_storage_state", return_value=None),
             patch("asyncio.sleep", new=AsyncMock()),
         ):
-            await routes._run_likes(tid)
+            await downloads._run_likes(tid)
         assert saver.save_dict.call_args.kwargs["sub_dir"] == "喜欢文章"
 
     async def test_run_download_ao3_uses_author_dir(self) -> None:
-        import web.routes as routes
+        from web import downloads, state
 
-        routes.task_manager = TaskManager()
-        tid = routes.task_manager.create("ao3")
+        state.task_manager = TaskManager()
+        tid = state.task_manager.create("ao3")
         ao3_client = MagicMock()
         ao3_client.get_work_info = AsyncMock(
             return_value={"author": "AO3作者", "title": "t"}
@@ -563,11 +563,11 @@ class TestSubDirNaming:
         ao3_client.close = AsyncMock()
         saver = self._make_saver()
         with (
-            patch("web.routes.AO3Client", return_value=ao3_client),
+            patch("web.downloads.AO3Client", return_value=ao3_client),
             patch("downloader.saver.PostSaver", return_value=saver),
-            patch("web.routes.load_storage_state", return_value=None),
+            patch("web.downloads.load_storage_state", return_value=None),
         ):
-            await routes._run_download_ao3(
+            await downloads._run_download_ao3(
                 tid,
                 ["https://archiveofourown.org/works/12345"],
                 "md",
