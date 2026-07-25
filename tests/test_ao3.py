@@ -17,9 +17,9 @@ from downloader.ao3 import (
     AO3Client,
     AO3Error,
     _extract_images,
-    _extract_work_id,
     _parse_work_meta,
     extract_username,
+    extract_work_id,
 )
 
 
@@ -70,10 +70,10 @@ class TestExtractUsername:
 class TestExtractWorkId:
     """作品 ID 提取测试。"""
 
-    def test_extract_work_id(self) -> None:
-        assert _extract_work_id("/works/12345") == "12345"
-        assert _extract_work_id("/works/12345/chapters/678") == "12345"
-        assert _extract_work_id("/series/999") is None
+    def testextract_work_id(self) -> None:
+        assert extract_work_id("/works/12345") == "12345"
+        assert extract_work_id("/works/12345/chapters/678") == "12345"
+        assert extract_work_id("/series/999") is None
 
 
 class TestParseWorkMeta:

@@ -15,7 +15,13 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from config import DOWNLOAD_DIR, SESSION_PATH
-from downloader.ao3 import AO3Client, AO3Error
+from downloader.ao3 import (
+    AO3Client,
+    AO3Error,
+    extract_series_id,
+    extract_username,
+    extract_work_id,
+)
 from downloader.auth import (
     LOGIN_TIMEOUT,
     check_login,
@@ -403,9 +409,7 @@ def _create_download_task(task_type: str, coro_func, *args) -> tuple:
         with _task_lock:
             if _running_task_id == task_id:
                 _running_task_id = None
-        task_manager.update(
-            task_id, status=TaskStatus.FAILED, error=_user_error(exc)
-        )
+        task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
         return jsonify(ok=False, error=_user_error(exc)), 500
     task_manager.set_future(task_id, future)
     return jsonify(task_id=task_id)
@@ -452,9 +456,7 @@ def _create_list_task(task_type: str, coro_func, *args) -> tuple:
         with _list_task_lock:
             if _running_list_kind == task_type:
                 _running_list_kind = None
-        task_manager.update(
-            task_id, status=TaskStatus.FAILED, error=_user_error(exc)
-        )
+        task_manager.update(task_id, status=TaskStatus.FAILED, error=_user_error(exc))
         return jsonify(ok=False, error=_user_error(exc)), 500
     task_manager.set_future(task_id, future)
     return jsonify(task_id=task_id)
@@ -622,7 +624,7 @@ async def _run_list_ao3(task_id: str, kind: str, query: str) -> None:
         name = ""
 
         if kind == "series":
-            series_id = _extract_ao3_series_id(query)
+            series_id = extract_series_id(query)
             if not series_id:
                 task_manager.update(
                     task_id,
@@ -633,7 +635,7 @@ async def _run_list_ao3(task_id: str, kind: str, query: str) -> None:
             items = await client.list_series(series_id)
             name = f"series_{series_id}"
         elif kind == "author":
-            username = _extract_ao3_username(query)
+            username = extract_username(query)
             if not username:
                 task_manager.update(
                     task_id,
@@ -854,7 +856,7 @@ async def _run_download_ao3(
 
         # 确定作者名（用于子目录），取第一篇
         first_author = ""
-        first_id = _extract_ao3_work_id(urls[0]) if urls else None
+        first_id = extract_work_id(urls[0]) if urls else None
         if first_id:
             try:
                 info = await _get_info(first_id)
@@ -879,7 +881,7 @@ async def _run_download_ao3(
         if source == "official":
             for idx, url in enumerate(urls):
                 _check_cancelled(task_id)
-                work_id = _extract_ao3_work_id(url)
+                work_id = extract_work_id(url)
                 if not work_id:
                     failure_count += 1
                     task_manager.update(
@@ -917,7 +919,7 @@ async def _run_download_ao3(
             saver = None
             for idx, url in enumerate(urls):
                 _check_cancelled(task_id)
-                work_id = _extract_ao3_work_id(url)
+                work_id = extract_work_id(url)
                 if not work_id:
                     failure_count += 1
                     task_manager.update(
@@ -1015,32 +1017,6 @@ async def _save_results(
 # ------------------------------------------------------------------
 # 辅助
 # ------------------------------------------------------------------
-
-
-def _extract_ao3_work_id(url: str) -> str | None:
-    """从 AO3 作品链接提取 ID。"""
-    import re
-
-    m = re.search(r"/works/(\d+)", url)
-    return m.group(1) if m else None
-
-
-def _extract_ao3_series_id(url: str) -> str | None:
-    """从 AO3 系列链接提取 ID。"""
-    import re
-
-    m = re.search(r"/series/(\d+)", url)
-    return m.group(1) if m else None
-
-
-def _extract_ao3_username(url: str) -> str | None:
-    """从 AO3 作者链接提取用户名（委托 ao3 模块的统一实现）。
-
-    支持 /users/xxx、/users/xxx/works、/users/xxx/pseuds/yyy 等形式。
-    """
-    from downloader.ao3 import extract_username
-
-    return extract_username(url)
 
 
 def _is_cancelled(task_id: str) -> bool:

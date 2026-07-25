@@ -125,7 +125,9 @@ class DownloadPipeline:
                 await context.close()
 
     async def collect_blog_links(
-        self, user_id: str, context=None,  # noqa: ANN001
+        self,
+        user_id: str,
+        context=None,  # noqa: ANN001
     ) -> tuple[list[str], str]:  # noqa: E501
         """收集作者全部文章链接（兼容旧接口）。
 
@@ -211,7 +213,9 @@ class DownloadPipeline:
     # ------------------------------------------------------------------
 
     async def _get_author_info(
-        self, domain: str, context=None,  # noqa: ANN001
+        self,
+        domain: str,
+        context=None,  # noqa: ANN001
     ) -> tuple[str | None, str | None]:  # noqa: E501
         """从 /view 页面获取 author_id 和 blog_name。"""
         url = f"https://{domain}.lofter.com/view"
@@ -313,9 +317,7 @@ class DownloadPipeline:
                     )
 
                     # 按 s<N>. 记录分组解析，permalink 与 title 组内配对
-                    records = [
-                        r for r in _parse_dwr_records(raw) if r.get("permalink")
-                    ]
+                    records = [r for r in _parse_dwr_records(raw) if r.get("permalink")]
                     batch_count = len(records)
                     if batch_count == 0:
                         break

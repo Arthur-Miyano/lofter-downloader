@@ -156,7 +156,7 @@ class AO3Client:
             link = li.select_one("h4.heading a[href^='/works/']")
             if not link:
                 continue
-            work_id = _extract_work_id(link.get("href", ""))
+            work_id = extract_work_id(link.get("href", ""))
             if not work_id:
                 continue
             title = link.get_text(strip=True)
@@ -197,7 +197,7 @@ class AO3Client:
             normalized = self.normalize_work_url(raw)
             if not normalized:
                 continue
-            work_id = _extract_work_id(normalized)
+            work_id = extract_work_id(normalized)
             if not work_id:
                 continue
             items.append(
@@ -225,7 +225,7 @@ class AO3Client:
             link = li.select_one("h4.heading a[href^='/works/']")
             if not link:
                 continue
-            work_id = _extract_work_id(link.get("href", ""))
+            work_id = extract_work_id(link.get("href", ""))
             if not work_id:
                 continue
             title = link.get_text(strip=True)
@@ -334,9 +334,7 @@ class AO3Client:
         ]
         if not chapters:
             chapters = [
-                ch
-                for ch in soup.select(".userstuff")
-                if not _in_preface_or_notes(ch)
+                ch for ch in soup.select(".userstuff") if not _in_preface_or_notes(ch)
             ]
 
         # 图片 src 统一改写为绝对 URL，
@@ -374,9 +372,15 @@ def _in_preface_or_notes(tag: Tag) -> bool:
     return tag.find_parent(class_=_PREFACE_NOTES_RE) is not None
 
 
-def _extract_work_id(href: str) -> str | None:
+def extract_work_id(href: str) -> str | None:
     """从 /works/:id 链接提取 ID。"""
     m = re.search(r"/works/(\d+)", href)
+    return m.group(1) if m else None
+
+
+def extract_series_id(url: str) -> str | None:
+    """从 /series/:id 链接提取 ID。"""
+    m = re.search(r"/series/(\d+)", url)
     return m.group(1) if m else None
 
 

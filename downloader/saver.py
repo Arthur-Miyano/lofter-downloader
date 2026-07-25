@@ -199,7 +199,8 @@ class PostSaver:
         return path
 
     async def _download_pdf_images(
-        self, urls: list[str],
+        self,
+        urls: list[str],
     ) -> dict[str, tuple]:
         """下载图片并转为 PNG 字节供 PDF 嵌入。
 
@@ -652,7 +653,9 @@ def _strip_inline_markdown(text: str) -> str:
 
 
 def _render_markdown_to_pdf(
-    pdf: object, md: str, images: dict[str, tuple] | None = None,
+    pdf: object,
+    md: str,
+    images: dict[str, tuple] | None = None,
 ) -> None:
     """按 Markdown 结构渲染 PDF：标题、段落、列表、代码块、缩进、图片。
 

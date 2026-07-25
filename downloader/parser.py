@@ -114,17 +114,17 @@ _HEAD_JUNK_RES = [
     re.compile(r"^\[\s*!\[[^\]]*\]\([^)]*\)\s*\]\([^)]*\)\s*$"),
     # URL 含头像/图标特征的裸图
     re.compile(r"^!\[[^\]]*\]\([^)]*(?:avatar|avaimg|icon)[^)]*\)\s*$"),
-    re.compile(r"^\[[^\]]*\]\([^)]*\)\s*$"),           # 纯链接行
-    re.compile(r"^#{1,6}\s*\[[^\]]*\]\([^)]*\)"),      # 链接标题（博客名/日期等）
+    re.compile(r"^\[[^\]]*\]\([^)]*\)\s*$"),  # 纯链接行
+    re.compile(r"^#{1,6}\s*\[[^\]]*\]\([^)]*\)"),  # 链接标题（博客名/日期等）
     re.compile(r"^[*\-+]\s*\[[^\]]*\]\([^)]*\)\s*$"),  # 链接列表项（博客导航）
 ]
 
 # 热度/评论/收藏区块特征（尾部出现后才启用序号/图标清理，
 # 避免把作者自己的编号脚注、文末插图当杂质删掉）
 _TAIL_LIKER_RES = [
-    re.compile(r"^\[(热度|评论)[^\]]*\]\("),            # 热度/评论入口
-    re.compile(r"^#{1,6}\s*(评论|热度)"),               # 评论/热度区块标题
-    re.compile(r"(共\d+人收藏了此|很喜欢此)"),           # 收藏/喜欢列表
+    re.compile(r"^\[(热度|评论)[^\]]*\]\("),  # 热度/评论入口
+    re.compile(r"^#{1,6}\s*(评论|热度)"),  # 评论/热度区块标题
+    re.compile(r"(共\d+人收藏了此|很喜欢此)"),  # 收藏/喜欢列表
 ]
 
 # 尾部杂质（仅作用于最后一个真实段落之后）
@@ -138,9 +138,9 @@ _TAIL_JUNK_RES = [
         r"(?:icon|avatar|avaimg|thumbnail=(?:16|32))[^)]*\)"
     ),
     re.compile(r"^\[[^\]]*(上一篇|下一篇|查看更多|返回首页)[^\]]*\]\("),
-    re.compile(r"^加载中"),                            # 加载占位
-    re.compile(r"^只展示最近"),                         # 数据说明
-    re.compile(r"^[©&]|Powered by", re.IGNORECASE),    # 版权页脚
+    re.compile(r"^加载中"),  # 加载占位
+    re.compile(r"^只展示最近"),  # 数据说明
+    re.compile(r"^[©&]|Powered by", re.IGNORECASE),  # 版权页脚
 ]
 
 # 热度区块里的序号项（需 liker 上下文确认）
@@ -149,9 +149,9 @@ _NUMBERED_RE = re.compile(r"^\d+\.\s")
 
 def _plain_len(line: str) -> int:
     """去除 Markdown 语法后的纯文本长度（用于判定真实段落）。"""
-    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)     # 图片
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)  # 图片
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # 链接保留文字
-    text = re.sub(r"[#>*_`~\-]+", "", text)              # 结构符号
+    text = re.sub(r"[#>*_`~\-]+", "", text)  # 结构符号
     return len(text.strip())
 
 
@@ -168,9 +168,7 @@ def _clean_content_markdown(md_text: str, title: str = "") -> str:
         return md_text
     lines = md_text.splitlines()
     real_idx = [
-        i
-        for i, ln in enumerate(lines)
-        if _plain_len(ln) >= _REAL_PARAGRAPH_MIN
+        i for i, ln in enumerate(lines) if _plain_len(ln) >= _REAL_PARAGRAPH_MIN
     ]
     if not real_idx:
         return md_text
@@ -186,15 +184,12 @@ def _clean_content_markdown(md_text: str, title: str = "") -> str:
             return True
         # 与文章标题重复的纯文本标题行
         return bool(
-            title_norm
-            and s.lstrip("# ").replace("\\", "").strip() == title_norm
+            title_norm and s.lstrip("# ").replace("\\", "").strip() == title_norm
         )
 
     tail_lines = lines[last + 1 :]
     # 尾部出现热度/评论/收藏区块特征后，序号项才判定为杂质
-    has_liker = any(
-        p.search(ln.strip()) for ln in tail_lines for p in _TAIL_LIKER_RES
-    )
+    has_liker = any(p.search(ln.strip()) for ln in tail_lines for p in _TAIL_LIKER_RES)
 
     def _is_tail_junk(line: str) -> bool:
         s = line.strip()

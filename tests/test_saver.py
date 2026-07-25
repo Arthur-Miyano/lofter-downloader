@@ -223,9 +223,7 @@ class TestPostSaver:
         await saver.close()
 
     @pytest.mark.asyncio
-    async def test_save_epub_produces_file_with_title(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_save_epub_produces_file_with_title(self, tmp_path: Path) -> None:
         """EPUB 导出：mock 图片下载，断言产出 .epub 且标题正确。"""
         from ebooklib import epub
 
@@ -245,9 +243,7 @@ class TestPostSaver:
             "publish_date": "2024-01-01",
             "url": "https://example.com/post/4",
             "content_markdown": "正文内容",
-            "content_html": (
-                '<p>正文内容</p><p><img src="https://img.com/a.png"></p>'
-            ),
+            "content_html": ('<p>正文内容</p><p><img src="https://img.com/a.png"></p>'),
             "image_urls": ["https://img.com/a.png"],
         }
         path = await saver.save_dict(post, fmt="epub")
