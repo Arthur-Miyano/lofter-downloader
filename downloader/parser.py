@@ -85,17 +85,134 @@ def _try_html(html: str, url: str) -> dict | None:
     # 图片：内容区域中的 img（排除头像和小图标）
     images = _extract_images(content_html or html)
 
+    # 清洗正文 Markdown：剔除模板带入的非文章内容（博客头部、
+    # 热度/评论、标签栏、上一篇/下一篇、版权页脚等）
+    content_md = md(content_html, heading_style="ATX") if content_html else ""
+    content_md = _clean_content_markdown(content_md, title)
+
     return {
         "url": url,
         "title": title,
         "author": author,
         "publish_date": date,
         "content_html": content_html,
-        "content_markdown": (
-            md(content_html, heading_style="ATX") if content_html else ""
-        ),
+        "content_markdown": content_md,
         "image_urls": images,
     }
+
+
+# ------------------------------------------------------------------
+# 正文清洗：剔除页面模板带入的非文章内容
+# ------------------------------------------------------------------
+
+# 真实段落判定：去除 Markdown 语法后纯文本不少于该长度
+_REAL_PARAGRAPH_MIN = 40
+
+# 头部杂质（仅作用于首个真实段落之前）
+_HEAD_JUNK_RES = [
+    # 链接包裹的图片（博客头像的典型形态，正文首图通常是裸图，不受影响）
+    re.compile(r"^\[\s*!\[[^\]]*\]\([^)]*\)\s*\]\([^)]*\)\s*$"),
+    # URL 含头像/图标特征的裸图
+    re.compile(r"^!\[[^\]]*\]\([^)]*(?:avatar|avaimg|icon)[^)]*\)\s*$"),
+    re.compile(r"^\[[^\]]*\]\([^)]*\)\s*$"),           # 纯链接行
+    re.compile(r"^#{1,6}\s*\[[^\]]*\]\([^)]*\)"),      # 链接标题（博客名/日期等）
+    re.compile(r"^[*\-+]\s*\[[^\]]*\]\([^)]*\)\s*$"),  # 链接列表项（博客导航）
+]
+
+# 热度/评论/收藏区块特征（尾部出现后才启用序号/图标清理，
+# 避免把作者自己的编号脚注、文末插图当杂质删掉）
+_TAIL_LIKER_RES = [
+    re.compile(r"^\[(热度|评论)[^\]]*\]\("),            # 热度/评论入口
+    re.compile(r"^#{1,6}\s*(评论|热度)"),               # 评论/热度区块标题
+    re.compile(r"(共\d+人收藏了此|很喜欢此)"),           # 收藏/喜欢列表
+]
+
+# 尾部杂质（仅作用于最后一个真实段落之后）
+_TAIL_JUNK_RES = [
+    # LOFTER 标签行
+    re.compile(r"^(\[(?:#|＃)[^\]]*\]\([^)]*/tag/[^)]*\)\s*)+$"),
+    *_TAIL_LIKER_RES,
+    # URL 含图标/头像/小缩略图特征的图片（正文尾图不受影响）
+    re.compile(
+        r"^!?\[?\s*!\[[^\]]*\]\([^)]*"
+        r"(?:icon|avatar|avaimg|thumbnail=(?:16|32))[^)]*\)"
+    ),
+    re.compile(r"^\[[^\]]*(上一篇|下一篇|查看更多|返回首页)[^\]]*\]\("),
+    re.compile(r"^加载中"),                            # 加载占位
+    re.compile(r"^只展示最近"),                         # 数据说明
+    re.compile(r"^[©&]|Powered by", re.IGNORECASE),    # 版权页脚
+]
+
+# 热度区块里的序号项（需 liker 上下文确认）
+_NUMBERED_RE = re.compile(r"^\d+\.\s")
+
+
+def _plain_len(line: str) -> int:
+    """去除 Markdown 语法后的纯文本长度（用于判定真实段落）。"""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)     # 图片
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # 链接保留文字
+    text = re.sub(r"[#>*_`~\-]+", "", text)              # 结构符号
+    return len(text.strip())
+
+
+def _clean_content_markdown(md_text: str, title: str = "") -> str:
+    """清洗正文 Markdown 首尾的模板杂质。
+
+    LOFTER 部分模板（尤其旧版博客主题）会把博客头部（头像/博客名/导航）
+    和页脚（标签/热度/评论/上下篇/版权）包进正文容器。这些杂质的特征
+    是几乎全由链接构成且聚集在首尾，因此只在「首个真实段落之前」和
+    「最后一个真实段落之后」两个区域内按模式删除，正文中间一律不动。
+    纯图集文章（无真实段落）不清洗，避免误删正文图片。
+    """
+    if not md_text:
+        return md_text
+    lines = md_text.splitlines()
+    real_idx = [
+        i
+        for i, ln in enumerate(lines)
+        if _plain_len(ln) >= _REAL_PARAGRAPH_MIN
+    ]
+    if not real_idx:
+        return md_text
+    first, last = real_idx[0], real_idx[-1]
+
+    title_norm = title.replace("\\", "").strip()
+
+    def _is_head_junk(line: str) -> bool:
+        s = line.strip()
+        if not s:
+            return False
+        if any(p.search(s) for p in _HEAD_JUNK_RES):
+            return True
+        # 与文章标题重复的纯文本标题行
+        return bool(
+            title_norm
+            and s.lstrip("# ").replace("\\", "").strip() == title_norm
+        )
+
+    tail_lines = lines[last + 1 :]
+    # 尾部出现热度/评论/收藏区块特征后，序号项才判定为杂质
+    has_liker = any(
+        p.search(ln.strip()) for ln in tail_lines for p in _TAIL_LIKER_RES
+    )
+
+    def _is_tail_junk(line: str) -> bool:
+        s = line.strip()
+        if not s:
+            return False
+        if any(p.search(s) for p in _TAIL_JUNK_RES):
+            return True
+        return bool(has_liker and _NUMBERED_RE.match(s))
+
+    kept = (
+        [ln for ln in lines[:first] if not _is_head_junk(ln)]
+        + lines[first : last + 1]
+        + [ln for ln in tail_lines if not _is_tail_junk(ln)]
+    )
+    cleaned = "\n".join(kept)
+    # 压缩删除后产生的连续空行
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip("\n")
+    return cleaned
 
 
 def _parse_title_tag(raw_title: str) -> tuple[str, str]:

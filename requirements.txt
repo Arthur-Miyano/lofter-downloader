@@ -8,3 +8,4 @@ markdownify==1.2.2
 fpdf2==2.8.2
 ebooklib==0.18
 pywebview==6.2.1
+pillow==12.2.0

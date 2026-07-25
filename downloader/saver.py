@@ -188,11 +188,60 @@ class PostSaver:
         pdf.cell(0, 6, f"链接: {post.get('url', '')}", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(6)
 
-        _render_markdown_to_pdf(pdf, post.get("content_markdown", ""))
+        content_md = post.get("content_markdown", "")
+        # 预下载正文引用的图片（失败不阻塞，渲染时降级为占位文本）
+        image_urls = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", content_md)
+        images = await self._download_pdf_images(image_urls)
+        _render_markdown_to_pdf(pdf, content_md, images=images)
 
         pdf.output(str(path))
         logger.info("PDF 已保存: %s", path)
         return path
+
+    async def _download_pdf_images(
+        self, urls: list[str],
+    ) -> dict[str, tuple]:
+        """下载图片并转为 PNG 字节供 PDF 嵌入。
+
+        返回 {url: (png_buffer, width_px, height_px)}。
+        借助 Pillow 统一转码（webp/gif 首帧 → PNG），透明底合成到白色。
+        单张失败跳过（渲染时显示 [图片] 占位）。
+        """
+        if not urls:
+            return {}
+        import io
+
+        try:
+            from PIL import Image
+        except ImportError:
+            logger.warning("未安装 Pillow，PDF 将不嵌入图片")
+            return {}
+
+        client = await self._get_client()
+        images: dict[str, tuple] = {}
+        for url in dict.fromkeys(urls):  # 去重保序
+            data = await _fetch_image_bytes(client, url)
+            if data is None:
+                continue
+            try:
+                img = Image.open(io.BytesIO(data))
+                img.load()
+                w, h = img.size
+                if img.mode in ("RGBA", "LA", "P"):
+                    # 透明底合成到白色，避免转 RGB 后变黑
+                    bg = Image.new("RGB", img.size, (255, 255, 255))
+                    rgba = img.convert("RGBA")
+                    bg.paste(rgba, mask=rgba.split()[-1])
+                    img = bg
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                buf.seek(0)
+                images[url] = (buf, w, h)
+            except Exception:
+                logger.warning("PDF 图片解码失败: %s", url)
+        return images
 
     async def _save_epub(self, post: dict, sub_dir: str) -> Path:
         """保存为 EPUB 电子书，嵌入图片，保留 HTML 排版。
@@ -359,6 +408,25 @@ class PostSaver:
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
+
+
+async def _fetch_image_bytes(client: httpx.AsyncClient, url: str) -> bytes | None:
+    """下载单张图片字节，含重试（指数退避）。非图片响应或失败返回 None。"""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            ct = resp.headers.get("content-type", "")
+            if ct and not ct.startswith("image/"):
+                logger.warning("非图片响应，跳过: %s (Content-Type: %s)", url, ct)
+                return None
+            return resp.content
+        except Exception as exc:
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(2 ** (attempt - 1))
+            else:
+                logger.warning("图片下载失败: %s - %s", url, exc)
+    return None
 
 
 def _infer_extension(url: str, content_type: str) -> str:
@@ -583,8 +651,14 @@ def _strip_inline_markdown(text: str) -> str:
     return text
 
 
-def _render_markdown_to_pdf(pdf: object, md: str) -> None:
-    """按 Markdown 结构渲染 PDF：标题、段落、列表、代码块、缩进。"""
+def _render_markdown_to_pdf(
+    pdf: object, md: str, images: dict[str, tuple] | None = None,
+) -> None:
+    """按 Markdown 结构渲染 PDF：标题、段落、列表、代码块、缩进、图片。
+
+    images: {url: (png_buffer, width_px, height_px)}，独占一行的图片
+    会被嵌入；未下载成功或行内图片降级为 [图片] 占位文本。
+    """
     lines = md.splitlines()
     i = 0
     in_code_block = False
@@ -607,7 +681,19 @@ def _render_markdown_to_pdf(pdf: object, md: str) -> None:
             i += 1
             continue
 
-        # 图片替换为占位文本，避免纯图集文章产出空文
+        # 独占一行的图片：嵌入已下载的图片，失败则占位文本
+        img_match = re.fullmatch(r"!\[[^\]]*\]\(([^)]+)\)", line.strip())
+        if img_match:
+            url = img_match.group(1)
+            if images and url in images:
+                _embed_pdf_image(pdf, *images[url])
+            else:
+                pdf.set_font("NotoSansCJK", "I", 9)
+                pdf.multi_cell(0, 5, "[图片]")
+            i += 1
+            continue
+
+        # 行内图片替换为占位文本，避免纯图集文章产出空文
         line = re.sub(r"!\[[^\]]*\]\([^)]+\)", "[图片]", line)
 
         # 标题
@@ -659,3 +745,24 @@ def _render_markdown_to_pdf(pdf: object, md: str) -> None:
         pdf.multi_cell(0, 5, _strip_inline_markdown(line))
         pdf.ln(1)
         i += 1
+
+
+def _embed_pdf_image(pdf: object, buf: object, w_px: int, h_px: int) -> None:
+    """将图片按版宽嵌入 PDF（居中、保持比例、必要时分页）。
+
+    按 96 DPI 换算物理宽度，超宽缩到版宽，超高缩到整页高。
+    """
+    max_w = pdf.w - pdf.l_margin - pdf.r_margin
+    w_mm = min(max_w, w_px * 25.4 / 96)
+    h_mm = w_mm * h_px / w_px
+    # 超高图片（长截图）缩放到一页能放下
+    max_h = pdf.h - pdf.t_margin - pdf.b_margin
+    if h_mm > max_h:
+        h_mm = max_h
+        w_mm = h_mm * w_px / h_px
+    # 剩余空间不足时先分页，避免图片溢出页脚
+    if pdf.get_y() + h_mm > pdf.page_break_trigger:
+        pdf.add_page()
+    x = pdf.l_margin + (max_w - w_mm) / 2
+    pdf.image(buf, x=x, y=pdf.get_y(), w=w_mm)
+    pdf.set_y(pdf.get_y() + h_mm + 2)

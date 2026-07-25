@@ -278,3 +278,65 @@ class TestPostSaver:
         assert path.suffix == ".pdf"
         assert path.stat().st_size > 0
         await saver.close()
+
+    @pytest.mark.asyncio
+    async def test_save_pdf_embeds_image(self, tmp_path: Path) -> None:
+        """PDF 导出：独占一行的图片被下载并嵌入（产出含 Image XObject）。"""
+        import io
+
+        from PIL import Image
+
+        # 生成一张真实 PNG 供 mock 下载
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 30), (200, 100, 50)).save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+
+        saver = PostSaver(tmp_path)
+        resp = MagicMock()
+        resp.headers = {"content-type": "image/png"}
+        resp.content = png_bytes
+        resp.raise_for_status = MagicMock()
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=resp)
+        saver._http_client = client
+
+        post = {
+            "title": "带图文章",
+            "author": "作者E",
+            "publish_date": "2024-01-01",
+            "url": "https://example.com/post/6",
+            "content_markdown": "前文段落。\n\n![插图](https://img.com/p.png)\n\n后文段落。",
+            "content_html": "",
+            "image_urls": ["https://img.com/p.png"],
+        }
+        path = await saver.save_dict(post, fmt="pdf")
+        assert path.exists()
+        data = path.read_bytes()
+        assert b"/Subtype /Image" in data
+        client.get.assert_called_once_with("https://img.com/p.png")
+        await saver.close()
+
+    @pytest.mark.asyncio
+    async def test_save_pdf_image_failure_uses_placeholder(
+        self, tmp_path: Path
+    ) -> None:
+        """PDF 导出：图片下载失败时降级为 [图片] 占位，不阻塞保存。"""
+        saver = PostSaver(tmp_path)
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=RuntimeError("网络错误"))
+        saver._http_client = client
+
+        post = {
+            "title": "裂图文章",
+            "author": "作者F",
+            "publish_date": "2024-01-01",
+            "url": "https://example.com/post/7",
+            "content_markdown": "前文。\n\n![插图](https://img.com/broken.png)\n\n后文。",
+            "content_html": "",
+            "image_urls": ["https://img.com/broken.png"],
+        }
+        path = await saver.save_dict(post, fmt="pdf")
+        assert path.exists()
+        assert path.stat().st_size > 0
+        assert b"/Subtype /Image" not in path.read_bytes()
+        await saver.close()

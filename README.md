@@ -45,7 +45,7 @@ LOFTER 自 2026 年起实施了全站登录墙 — 所有页面在未登录状�
 **导出格式**
 - **Markdown** — 文章正文 + 独立图片文件夹，适合归档和二次编辑
 - **TXT** — 纯文本单文件，不含图片，适合文本分析
-- **PDF** — 含 CJK 中文字体渲染的格式化文档，适合打印和分享
+- **PDF** — 含 CJK 中文字体渲染的格式化文档，正文图片自动下载嵌入，适合打印和分享
 - **EPUB** — 电子书，嵌入图片，保留 HTML 排版
 
 **用户体验**
@@ -91,7 +91,7 @@ LOFTER_NO_GUI=1 python app.py   # 然后浏览器访问 http://127.0.0.1:8080
 powershell -ExecutionPolicy Bypass -File scripts/创建桌面快捷方式.ps1
 ```
 
-也可直接双击项目根目录的 `启动 LOFTER 下载器.bat`。如需重新生成图标：`python scripts/make_icon.py`（可选工具，需额外 `pip install Pillow`，非运行时依赖）。运行日志写入 `~/.lofter_downloader/app.log`。
+也可直接双击项目根目录的 `启动 LOFTER 下载器.bat`。如需重新生成图标：`python scripts/make_icon.py`（Pillow 已是运行时依赖，PDF 图片嵌入也依赖它）。运行日志写入 `~/.lofter_downloader/app.log`。
 
 ## Usage
 
@@ -206,7 +206,7 @@ lofter_downloads/
 | File Writing | aiofiles (异步写文件) |
 | Image Download | httpx (with Cookie + Referer headers) |
 | AO3 Download | httpx + `view_adult=true` Cookie |
-| PDF Generation | fpdf2 (with CJK font support) |
+| PDF Generation | fpdf2 (with CJK font support) + Pillow (图片嵌入转码) |
 | EPUB Generation | ebooklib |
 
 For detailed architecture documentation, see [docs/design.md](docs/design.md).
