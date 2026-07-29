@@ -290,3 +290,67 @@ class TestCleanContentMarkdown:
         cleaned = _clean_content_markdown(md, "论文")
         assert "此处引用自某某文献" in cleaned
         assert "作者补充说明" in cleaned
+
+
+class TestExtractDate:
+    """发布日期提取测试。"""
+
+    def test_date_from_meta_tag(self) -> None:
+        from downloader.parser import _try_html
+
+        html = """<html><head>
+            <meta property="article:published_time" content="2024-03-15T10:30:00+08:00">
+        </head><body>
+            <h1>标题</h1>
+            <article><p>正文内容足够长，用于通过内容长度校验。</p></article>
+        </body></html>"""
+        result = _try_html(html, "https://test.lofter.com/post/1")
+        assert result is not None
+        assert result["publish_date"] == "2024-03-15"
+
+    def test_date_from_dom_slash_format(self) -> None:
+        from downloader.parser import _try_html
+
+        html = """<html><body>
+            <h1>标题</h1>
+            <div class="publishDate">2024/03/15</div>
+            <article><p>正文内容足够长，用于通过内容长度校验。</p></article>
+        </body></html>"""
+        result = _try_html(html, "https://test.lofter.com/post/1")
+        assert result is not None
+        assert result["publish_date"] == "2024-03-15"
+
+    def test_date_from_dom_chinese_format(self) -> None:
+        from downloader.parser import _try_html
+
+        html = """<html><body>
+            <h1>标题</h1>
+            <span class="post-date">2024年3月15日</span>
+            <article><p>正文内容足够长，用于通过内容长度校验。</p></article>
+        </body></html>"""
+        result = _try_html(html, "https://test.lofter.com/post/1")
+        assert result is not None
+        assert result["publish_date"] == "2024-3-15"
+
+    def test_date_from_time_element(self) -> None:
+        from downloader.parser import _try_html
+
+        html = """<html><body>
+            <h1>标题</h1>
+            <time datetime="2024-03-15">3月15日</time>
+            <article><p>正文内容足够长，用于通过内容长度校验。</p></article>
+        </body></html>"""
+        result = _try_html(html, "https://test.lofter.com/post/1")
+        assert result is not None
+        assert result["publish_date"] == "2024-03-15"
+
+    def test_no_date_returns_empty(self) -> None:
+        from downloader.parser import _try_html
+
+        html = """<html><body>
+            <h1>标题</h1>
+            <article><p>正文内容足够长，用于通过内容长度校验。</p></article>
+        </body></html>"""
+        result = _try_html(html, "https://test.lofter.com/post/1")
+        assert result is not None
+        assert result["publish_date"] == ""

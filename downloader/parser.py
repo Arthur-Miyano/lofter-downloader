@@ -76,10 +76,10 @@ def _try_html(html: str, url: str) -> dict | None:
     # 作者：优先从 title 提取，否则查找 DOM
     author = author_from_title or _extract_author(soup) or "未知作者"
 
-    # 日期：优先查找 .date 元素，其次从正文匹配 YYYY-MM-DD / YYYY.MM.DD
+    # 日期：优先 DOM/meta 提取，其次从正文匹配 YYYY-MM-DD / YYYY.MM.DD 等
     body_text = soup.body.get_text(separator=" ", strip=True) if soup.body else ""
-    date = _extract_date_from_text(body_text, content_html) or _extract_date_from_soup(
-        soup
+    date = _extract_date_from_soup(soup) or _extract_date_from_text(
+        body_text, content_html
     )
 
     # 图片：内容区域中的 img（排除头像和小图标）
@@ -271,7 +271,7 @@ def _extract_author(soup: BeautifulSoup) -> str:
 
 
 def _extract_date_from_text(body_text: str, content_html: str) -> str:
-    """从文本中匹配日期：YYYY-MM-DD 或 YYYY.MM.DD 或 YYYY年MM月DD日。
+    """从文本中匹配日期：YYYY-MM-DD / YYYY.MM.DD / YYYY/MM/DD / YYYY年MM月DD日。
 
     优先在 content_html 中搜索，仅未找到时才回退到全页 body_text。
     """
@@ -279,8 +279,9 @@ def _extract_date_from_text(body_text: str, content_html: str) -> str:
         if not source:
             continue
         for pattern in (
-            r"(\d{4}-\d{2}-\d{2})",
-            r"(\d{4}\.\d{2}\.\d{2})",
+            r"(\d{4}-\d{1,2}-\d{1,2})",
+            r"(\d{4}\.\d{1,2}\.\d{1,2})",
+            r"(\d{4}/\d{1,2}/\d{1,2})",
             r"(\d{4}年\d{1,2}月\d{1,2}日)",
         ):
             m = re.search(pattern, source)
@@ -288,6 +289,7 @@ def _extract_date_from_text(body_text: str, content_html: str) -> str:
                 return (
                     m.group(1)
                     .replace(".", "-")
+                    .replace("/", "-")
                     .replace("年", "-")
                     .replace("月", "-")
                     .replace("日", "")
@@ -296,14 +298,43 @@ def _extract_date_from_text(body_text: str, content_html: str) -> str:
 
 
 def _extract_date_from_soup(soup: BeautifulSoup) -> str:
-    """从 DOM 元素提取日期（如 <a class=\"date\">2019.11.24</a>）。"""
-    date_el = soup.select_one(".date, [class*='date'], time, [datetime]")
+    """从 DOM 元素或 meta 标签提取日期。
+
+    覆盖 LOFTER 常见结构：.date / time[datetime] / .publishDate / .post-date，
+    以及 <meta property="article:published_time"> 等。
+    """
+    # 优先 meta 标签（通常最准确）
+    for meta in soup.select(
+        "meta[property='article:published_time'], "
+        "meta[name='publishdate'], meta[name='date'], meta[itemprop='datePublished']"
+    ):
+        content = meta.get("content", "")
+        m = re.search(r"(\d{4}[./-]\d{1,2}[./-]\d{1,2})", content)
+        if m:
+            return m.group(1).replace(".", "-").replace("/", "-")
+
+    # DOM 元素
+    date_el = soup.select_one(
+        ".date, [class*='date'], time, [datetime], "
+        ".publishDate, .post-date, .time, .meta-date"
+    )
     if not date_el:
         return ""
     dt = date_el.get("datetime", "") or date_el.get_text(strip=True)
-    m = re.search(r"(\d{4}[.-]\d{2}[.-]\d{2})", dt)
-    if m:
-        return m.group(1).replace(".", "-")
+    for pattern in (
+        r"(\d{4}[./-]\d{1,2}[./-]\d{1,2})",
+        r"(\d{4}年\d{1,2}月\d{1,2}日)",
+    ):
+        m = re.search(pattern, dt)
+        if m:
+            return (
+                m.group(1)
+                .replace(".", "-")
+                .replace("/", "-")
+                .replace("年", "-")
+                .replace("月", "-")
+                .replace("日", "")
+            )
     return ""
 
 

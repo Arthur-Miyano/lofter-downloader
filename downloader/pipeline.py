@@ -317,9 +317,9 @@ class DownloadPipeline:
                     )
 
                     # 按 s<N>. 记录分组解析，permalink 与 title 组内配对
-                    records = [r for r in _parse_dwr_records(raw) if r.get("permalink")]
-                    batch_count = len(records)
-                    if batch_count == 0:
+                    raw_records = _parse_dwr_records(raw)
+                    records = [r for r in raw_records if r.get("permalink")]
+                    if not records:
                         break
 
                     new_in_batch = 0
@@ -333,10 +333,10 @@ class DownloadPipeline:
                             all_items.append({"url": link, "title": title})
                             new_in_batch += 1
 
-                    # 游标按本批原始记录数推进（去重不影响分页位置）
-                    last_timestamp = records[-1].get("time") or _extract_last_timestamp(
-                        raw, batch_count
-                    )
+                    # 游标必须按原始响应的记录数推进：
+                    # 若本批末尾存在无 permalink 的记录，用过滤后的 records[-1]
+                    # 会让游标回退，导致下一页重复或遗漏。
+                    last_timestamp = _extract_last_timestamp(raw, len(raw_records))
 
                     logger.debug(
                         "DWR archive [ts=%s]: +%d 篇 (累计 %d)",
